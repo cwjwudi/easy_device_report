@@ -56,6 +56,21 @@ function setStatus(selector, message, isError = false) {
   el.style.color = isError ? "#b42318" : "#657184";
 }
 
+function showToast(message, type = "info") {
+  const icons = { success: "✓", error: "✕", info: "ℹ" };
+  const container = document.getElementById("toastContainer");
+  if (!container) return;
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.innerHTML = `<span class="toast-icon">${icons[type] ?? "ℹ"}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  const remove = () => {
+    toast.classList.add("toast-hide");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+  };
+  setTimeout(remove, 3000);
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -1200,6 +1215,8 @@ async function previewEdited() {
 }
 
 async function saveTemplate() {
+  const btn = $("#saveTemplateBtn");
+  btn.disabled = true;
   try {
     if (state.designer.activeTab === "advanced" && !applyJsonToDesigner(false)) return;
     syncDesignerFromInputs();
@@ -1210,26 +1227,48 @@ async function saveTemplate() {
     state.selectedTemplateId = saved.id;
     await loadTemplates();
     setStatus("#templateStatus", "模板已保存");
+    showToast("模板已保存", "success");
   } catch (error) {
     setStatus("#templateStatus", `保存失败：${error.message}`, true);
+    showToast(`保存失败：${error.message}`, "error");
+  } finally {
+    btn.disabled = false;
   }
 }
 
 async function copyTemplate() {
   if (!state.selectedTemplateId) return;
-  const copied = await api(`/api/report-templates/${state.selectedTemplateId}/copy`, { method: "POST", body: "{}" });
-  state.selectedTemplateId = copied.id;
-  await loadTemplates();
+  const btn = $("#copyTemplateBtn");
+  btn.disabled = true;
+  try {
+    const copied = await api(`/api/report-templates/${state.selectedTemplateId}/copy`, { method: "POST", body: "{}" });
+    state.selectedTemplateId = copied.id;
+    await loadTemplates();
+    showToast("模板已复制", "success");
+  } catch (error) {
+    showToast(`复制失败：${error.message}`, "error");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function deleteTemplate() {
   if (!state.selectedTemplateId) return;
   const template = currentTemplate();
   if (!confirm(`删除模板 "${template.name}"？`)) return;
-  await api(`/api/report-templates/${state.selectedTemplateId}`, { method: "DELETE" });
-  state.selectedTemplateId = null;
-  state.designerTemplate = null;
-  await loadTemplates();
+  const btn = $("#deleteTemplateBtn");
+  btn.disabled = true;
+  try {
+    await api(`/api/report-templates/${state.selectedTemplateId}`, { method: "DELETE" });
+    state.selectedTemplateId = null;
+    state.designerTemplate = null;
+    await loadTemplates();
+    showToast("模板已删除", "info");
+  } catch (error) {
+    showToast(`删除失败：${error.message}`, "error");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function newTemplate() {
@@ -1242,6 +1281,7 @@ function newTemplate() {
   state.designer.bodyEditorOpen = false;
   renderTemplateList();
   renderDesigner();
+  showToast("新建模板已就绪，请填写后保存", "info");
 }
 
 async function exportReport(format) {

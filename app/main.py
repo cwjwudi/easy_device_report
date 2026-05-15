@@ -1044,7 +1044,7 @@ def seed_defaults() -> None:
     with sqlite_connect(APP_DB) as conn:
         if conn.execute("SELECT COUNT(*) AS value FROM report_templates").fetchone()["value"] == 0:
             upsert_template(conn, sample_sqlite_template())
-        upsert_template(conn, field_mysql_template())
+            upsert_template(conn, field_mysql_template())
         upsert_data_source(conn, "演示 SQLite 数据库", "database", {"type": "sqlite", "path": str(DEMO_DB)})
         upsert_data_source(conn, "现场 MySQL wn_10", "database", FIELD_MYSQL)
         upsert_data_source(conn, "现场 OPC UA", "opcua", FIELD_OPCUA)
