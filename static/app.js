@@ -8,7 +8,8 @@ const state = {
     activeTab: "page",
     selectedRegion: "header",
     selectedCell: { region: "header", row: 0, col: 0 },
-    selectedBodyCustomTable: 0,
+    selectedBodyTable: 0,
+    bodyEditorOpen: false,
     schema: null,
     opcuaNodes: [],
   },
@@ -74,18 +75,116 @@ function ensureTemplateShape(template) {
   config.database ||= { type: "sqlite", path: state.health?.demo_db || "" };
   config.header ||= { title: "页眉", rows: [[{ type: "static", value: "" }]] };
   config.footer ||= { title: "页脚", rows: [[{ type: "static", value: "" }]] };
-  config.body ||= { table: "", columns: [], filters: [], order_by: [], limit: 100 };
+  config.body ||= {};
   config.header.rows = normalizeRegionRows(config.header.rows);
   config.footer.rows = normalizeRegionRows(config.footer.rows);
-  config.body.columns ||= [];
-  config.body.filters ||= [];
-  config.body.order_by ||= [];
-  config.body.custom_tables = Array.isArray(config.body.custom_tables) ? config.body.custom_tables : [];
-  config.body.custom_tables = config.body.custom_tables.map((table, index) => ({
-    title: table?.title || `自定义表格 ${index + 1}`,
-    rows: normalizeRegionRows(table?.rows),
-  }));
+  config.body = normalizeBodyConfig(config.body);
   return config;
+}
+
+function generateTableId(kind) {
+  const prefix = kind === "custom" ? "c" : "q";
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function normalizeBodyConfig(body) {
+  body = body && typeof body === "object" ? { ...body } : {};
+  let tables = Array.isArray(body.tables) ? body.tables.slice() : null;
+
+  if (!tables || !tables.length) {
+    tables = [];
+    const hasLegacyQuery =
+      body.table ||
+      (Array.isArray(body.columns) && body.columns.length) ||
+      (Array.isArray(body.filters) && body.filters.length) ||
+      (Array.isArray(body.order_by) && body.order_by.length) ||
+      body.limit !== undefined;
+    if (hasLegacyQuery) {
+      tables.push({
+        id: generateTableId("query"),
+        kind: "query",
+        title: "",
+        table: body.table || "",
+        columns: Array.isArray(body.columns) ? body.columns : [],
+        filters: Array.isArray(body.filters) ? body.filters : [],
+        order_by: Array.isArray(body.order_by) ? body.order_by : [],
+        limit: Number(body.limit) || 100,
+      });
+    }
+    if (Array.isArray(body.custom_tables)) {
+      body.custom_tables.forEach((table, index) => {
+        if (!table || typeof table !== "object") return;
+        tables.push({
+          id: generateTableId("custom"),
+          kind: "custom",
+          title: table.title || `自定义表格 ${index + 1}`,
+          rows: normalizeRegionRows(table.rows),
+        });
+      });
+    }
+  } else {
+    tables = tables.map((item, index) => normalizeBodyTable(item, index));
+  }
+
+  delete body.table;
+  delete body.columns;
+  delete body.filters;
+  delete body.order_by;
+  delete body.limit;
+  delete body.custom_tables;
+  body.tables = tables;
+  return body;
+}
+
+function normalizeBodyTable(item, index) {
+  const safe = item && typeof item === "object" ? { ...item } : {};
+  const kind = safe.kind === "custom" ? "custom" : "query";
+  const out = {
+    id: safe.id || generateTableId(kind),
+    kind,
+    title: typeof safe.title === "string" ? safe.title : "",
+  };
+  if (kind === "custom") {
+    out.rows = normalizeRegionRows(safe.rows);
+  } else {
+    out.table = safe.table || "";
+    out.columns = Array.isArray(safe.columns) ? safe.columns : [];
+    out.filters = Array.isArray(safe.filters) ? safe.filters : [];
+    out.order_by = Array.isArray(safe.order_by) ? safe.order_by : [];
+    out.limit = Number(safe.limit) || 100;
+  }
+  return out;
+}
+
+function bodyTables() {
+  const list = state.designerTemplate?.body?.tables;
+  return Array.isArray(list) ? list : [];
+}
+
+function clampSelectedBodyTable() {
+  const tables = bodyTables();
+  if (!tables.length) {
+    state.designer.selectedBodyTable = 0;
+    return -1;
+  }
+  if (state.designer.selectedBodyTable >= tables.length) state.designer.selectedBodyTable = tables.length - 1;
+  if (state.designer.selectedBodyTable < 0) state.designer.selectedBodyTable = 0;
+  return state.designer.selectedBodyTable;
+}
+
+function currentBodyTable() {
+  const idx = clampSelectedBodyTable();
+  if (idx < 0) return null;
+  return bodyTables()[idx];
+}
+
+function currentBodyQuery() {
+  const t = currentBodyTable();
+  return t && t.kind === "query" ? t : null;
+}
+
+function queryTables() {
+  return bodyTables().filter((t) => t.kind === "query");
 }
 
 function normalizeRegionRows(rows) {
@@ -110,8 +209,9 @@ function getSelectedCell() {
   const selected = state.designer.selectedCell;
   if (!state.designerTemplate || !selected) return null;
   if (selected.region === "body_custom") {
-    const rows = state.designerTemplate.body?.custom_tables?.[selected.tableIndex || 0]?.rows;
-    return rows?.[selected.row]?.[selected.col] || null;
+    const table = bodyTables()[selected.tableIndex ?? state.designer.selectedBodyTable];
+    if (!table || table.kind !== "custom") return null;
+    return table.rows?.[selected.row]?.[selected.col] || null;
   }
   const rows = state.designerTemplate[selected.region]?.rows;
   return rows?.[selected.row]?.[selected.col] || null;
@@ -121,8 +221,10 @@ function setSelectedCell(cell) {
   const selected = state.designer.selectedCell;
   if (!state.designerTemplate || !selected) return;
   if (selected.region === "body_custom") {
-    const rows = state.designerTemplate.body?.custom_tables?.[selected.tableIndex || 0]?.rows;
-    if (rows?.[selected.row]) rows[selected.row][selected.col] = cell;
+    const table = bodyTables()[selected.tableIndex ?? state.designer.selectedBodyTable];
+    if (table && table.kind === "custom" && table.rows?.[selected.row]) {
+      table.rows[selected.row][selected.col] = cell;
+    }
   } else {
     state.designerTemplate[selected.region].rows[selected.row][selected.col] = cell;
   }
@@ -142,12 +244,24 @@ function syncDesignerFromInputs() {
     orientation: $("#pageOrientation")?.value || "portrait",
     margin_mm: Number($("#pageMargin")?.value || 14),
   };
-  const body = state.designerTemplate.body;
-  body.table = $("#bodyTable")?.value.trim() || body.table || "";
-  body.limit = Number($("#bodyLimit")?.value || body.limit || 100);
-  const orderColumn = $("#bodyOrderColumn")?.value || "";
-  const orderDirection = $("#bodyOrderDirection")?.value || "ASC";
-  body.order_by = orderColumn ? [{ column: orderColumn, direction: orderDirection }] : [];
+  const activeBodyTable = state.designer.bodyEditorOpen ? currentBodyTable() : null;
+  const query = activeBodyTable?.kind === "query" ? activeBodyTable : null;
+  if (query) {
+    const tableInput = $("#bodyTable")?.value;
+    if (typeof tableInput === "string") query.table = tableInput.trim() || query.table || "";
+    const limitInput = $("#bodyLimit")?.value;
+    if (limitInput !== undefined && limitInput !== "") query.limit = Number(limitInput) || query.limit || 100;
+    const orderColumn = $("#bodyOrderColumn")?.value || "";
+    const orderDirection = $("#bodyOrderDirection")?.value || "ASC";
+    query.order_by = orderColumn ? [{ column: orderColumn, direction: orderDirection }] : [];
+  }
+  const current = currentBodyTable();
+  if (current) {
+    const titleInput = $("#bodyTableTitle");
+    if (titleInput && document.activeElement !== titleInput) {
+      titleInput.value = current.title || "";
+    }
+  }
 
   state.designerTemplate.opcua.server_url = $("#tplOpcServer")?.value.trim() || state.designerTemplate.opcua.server_url || "mock://local";
   state.designerTemplate.opcua.root_node = $("#tplOpcRoot")?.value.trim() || state.designerTemplate.opcua.root_node || "ns=6;i=1000";
@@ -182,7 +296,8 @@ function applyJsonToDesigner(showStatus = false) {
   try {
     state.designerTemplate = ensureTemplateShape(JSON.parse($("#templateEditor").value));
     state.designer.selectedCell = { region: "header", row: 0, col: 0 };
-    state.designer.selectedBodyCustomTable = 0;
+    state.designer.selectedBodyTable = 0;
+    state.designer.bodyEditorOpen = false;
     renderDesigner();
     if (showStatus) setStatus("#templateStatus", "JSON 已应用到设计器");
     return true;
@@ -216,14 +331,16 @@ function templateDbConnection() {
 
 function getSchemaColumns() {
   const schema = state.designer.schema;
-  const table = state.designerTemplate?.body?.table;
+  const query = currentBodyQuery() || queryTables()[0];
+  const table = query?.table;
   const match = schema?.tables?.find((item) => item.table === table) || schema?.tables?.[0];
   return (match?.columns || []).map((column) => column.Field || column.name).filter(Boolean);
 }
 
 function allKnownColumns() {
   const fromSchema = getSchemaColumns();
-  const fromBody = (state.designerTemplate?.body?.columns || []).map((column) => column.name);
+  const query = currentBodyQuery() || queryTables()[0];
+  const fromBody = (query?.columns || []).map((column) => column.name);
   return Array.from(new Set([...fromBody, ...fromSchema])).filter(Boolean);
 }
 
@@ -234,43 +351,65 @@ function renderSimpleTable(rows) {
     .join("")}</tbody></table>`;
 }
 
-function renderReportCustomTables(tables) {
-  return (tables || [])
+function renderReportQueryTable(columns, rows) {
+  columns = columns || [];
+  rows = rows || [];
+  if (!columns.length) {
+    return `<table class="report-table"><tbody><tr><td>没有查询到数据</td></tr></tbody></table>`;
+  }
+  return `<table class="report-table">
+    <thead><tr>${columns.map((column) => `<th>${escapeHtml(column.label || column.name || "")}</th>`).join("")}</tr></thead>
+    <tbody>${
+      rows.length
+        ? rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column.name])}</td>`).join("")}</tr>`).join("")
+        : `<tr><td colspan="${columns.length}">没有查询到数据</td></tr>`
+    }</tbody>
+  </table>`;
+}
+
+function renderReportBody(body) {
+  const tables = body?.tables;
+  if (Array.isArray(tables) && tables.length) {
+    return tables
+      .map((table) => {
+        const title = table.title ? `<h3>${escapeHtml(table.title)}</h3>` : "";
+        const content =
+          table.kind === "query"
+            ? renderReportQueryTable(table.columns, table.rows)
+            : renderSimpleTable(table.rows);
+        return `<section class="report-section">${title}${content}</section>`;
+      })
+      .join("");
+  }
+  const customLegacy = (body?.custom_tables || [])
     .map(
-      (table) => `
-        <section class="report-section">
-          ${table.title ? `<h3>${escapeHtml(table.title)}</h3>` : ""}
-          ${renderSimpleTable(table.rows)}
-        </section>`
+      (table) => `<section class="report-section">${table.title ? `<h3>${escapeHtml(table.title)}</h3>` : ""}${renderSimpleTable(table.rows)}</section>`
     )
     .join("");
+  return customLegacy + renderReportQueryTable(body?.columns, body?.rows);
 }
 
 function renderReport(report) {
   state.lastReport = report;
-  const columns = report.body.columns || [];
-  const rows = report.body.rows || [];
+  const rows = report.body?.rows || [];
+  const tables = report.body?.tables || [];
+  const totalRows = tables.length
+    ? tables.filter((t) => t.kind === "query").reduce((acc, t) => acc + (t.row_count || (t.rows || []).length), 0)
+    : rows.length;
+  const sqls = tables.length
+    ? tables.filter((t) => t.kind === "query" && t.sql).map((t) => `-- ${t.title || t.table || t.id}\n${t.sql}`).join("\n\n")
+    : report.body?.sql || "";
   $("#reportPreview").innerHTML = `
     <div class="report-title">
       <strong>${escapeHtml(report.name)}</strong>
-      <span>生成时间 ${escapeHtml(report.generated_at)} · ${rows.length} 行</span>
+      <span>生成时间 ${escapeHtml(report.generated_at)} · ${totalRows} 行</span>
     </div>
     ${renderSimpleTable(report.header.rows)}
-    ${renderReportCustomTables(report.body.custom_tables)}
-    <table class="report-table">
-      <thead><tr>${columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead>
-      <tbody>
-        ${
-          rows.length
-            ? rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column.name])}</td>`).join("")}</tr>`).join("")
-            : `<tr><td colspan="${Math.max(columns.length, 1)}">没有查询到数据</td></tr>`
-        }
-      </tbody>
-    </table>
+    ${renderReportBody(report.body)}
     ${renderSimpleTable(report.footer.rows)}
     <details>
       <summary>查询信息</summary>
-      <pre>${escapeHtml(report.body.sql || "")}</pre>
+      <pre>${escapeHtml(sqls)}</pre>
       <pre>${escapeHtml(pretty(report.opcua_values || {}))}</pre>
     </details>
   `;
@@ -298,7 +437,8 @@ function selectTemplate(id) {
   if (!template) return;
   state.designerTemplate = ensureTemplateShape(template.config);
   state.designer.selectedCell = { region: "header", row: 0, col: 0 };
-  state.designer.selectedBodyCustomTable = 0;
+  state.designer.selectedBodyTable = 0;
+  state.designer.bodyEditorOpen = false;
   $("#templateName").value = state.designerTemplate.name;
   $("#templateSelect").value = String(template.id);
   renderTemplateList();
@@ -312,7 +452,6 @@ function renderDesigner() {
   $("#pageSize").value = tpl.page?.size || "A4";
   $("#pageOrientation").value = tpl.page?.orientation || "portrait";
   $("#pageMargin").value = tpl.page?.margin_mm ?? 14;
-  $("#bodyLimit").value = tpl.body?.limit || 100;
   if ($("#tplOpcServer")) $("#tplOpcServer").value = tpl.opcua?.server_url || "";
   if ($("#tplOpcRoot")) $("#tplOpcRoot").value = tpl.opcua?.root_node || "ns=6;i=1000";
   if ($("#tplDbType")) $("#tplDbType").value = tpl.database?.type || "sqlite";
@@ -361,17 +500,142 @@ function renderRegionTable(region) {
 }
 
 function renderBodyDesigner() {
+  renderBodyTablesList();
+  const tables = bodyTables();
+  const queryPanel = $("#bodyQueryEditor");
+  const customPanel = $("#bodyCustomEditor");
+  const emptyNote = $("#bodyTablesEmpty");
+  const detailPanel = $("#bodyTableDetail");
+  if (!tables.length) {
+    queryPanel?.classList.remove("active");
+    customPanel?.classList.remove("active");
+    detailPanel?.classList.remove("active");
+    state.designer.bodyEditorOpen = false;
+    if (emptyNote) emptyNote.style.display = "block";
+    return;
+  }
+  if (emptyNote) emptyNote.style.display = "none";
+  if (!state.designer.bodyEditorOpen) {
+    queryPanel?.classList.remove("active");
+    customPanel?.classList.remove("active");
+    detailPanel?.classList.remove("active");
+    return;
+  }
+  const current = currentBodyTable();
+  detailPanel?.classList.add("active");
+  renderBodyDetailHeader(current);
+  if (current?.kind === "query") {
+    queryPanel?.classList.add("active");
+    customPanel?.classList.remove("active");
+    renderBodyQueryEditor(current);
+  } else if (current?.kind === "custom") {
+    customPanel?.classList.add("active");
+    queryPanel?.classList.remove("active");
+    renderBodyCustomEditor(current);
+  }
+}
+
+function bodyTableLabel(table, index) {
+  if (!table) return "";
+  return table.title || (table.kind === "query" ? table.table || `数据库查询表 ${index + 1}` : `自定义表 ${index + 1}`);
+}
+
+function bodyTableSummary(table) {
+  if (!table) return "";
+  if (table.kind === "query") {
+    const count = (table.columns || []).length;
+    return `${table.table || "未选择查询表"} · ${count ? `${count} 个字段` : "未选择字段"} · ${table.limit || 100} 行`;
+  }
+  const rows = table.rows || [];
+  const rowCount = rows.length || 0;
+  const colCount = rows[0]?.length || 0;
+  return `${rowCount} 行 × ${colCount} 列`;
+}
+
+function renderBodyTablesList() {
+  const list = $("#bodyTableList");
+  if (!list) return;
+  const tables = bodyTables();
+  if (!tables.length) {
+    list.innerHTML = "";
+    return;
+  }
+  const idx = clampSelectedBodyTable();
+  list.innerHTML = tables
+    .map((t, i) => {
+      const kindLabel = t.kind === "query" ? "查询" : "自定义";
+      const isActive = i === idx && state.designer.bodyEditorOpen;
+      return `
+        <div class="body-table-item ${isActive ? "active" : ""}">
+          <button class="body-table-main" data-body-table-open="${i}">
+            <span class="body-table-badge">${kindLabel}</span>
+            <span class="body-table-name">${escapeHtml(bodyTableLabel(t, i))}</span>
+            <span class="body-table-summary">${escapeHtml(bodyTableSummary(t))}</span>
+          </button>
+          <div class="body-table-actions">
+            <button class="secondary" data-body-table-open="${i}">${isActive ? "收起" : "配置"}</button>
+            <button class="secondary icon-btn" data-body-table-move="${i}" data-dir="-1" ${i <= 0 ? "disabled" : ""}>↑</button>
+            <button class="secondary icon-btn" data-body-table-move="${i}" data-dir="1" ${i >= tables.length - 1 ? "disabled" : ""}>↓</button>
+            <button class="danger icon-btn" data-body-table-remove="${i}">×</button>
+          </div>
+        </div>`;
+    })
+    .join("");
+}
+
+function renderBodyDetailHeader(table) {
+  if (!table) return;
+  const idx = clampSelectedBodyTable();
+  const title = $("#bodyTableDetailTitle");
+  const meta = $("#bodyTableDetailMeta");
+  const titleInput = $("#bodyTableTitle");
+  if (title) title.textContent = bodyTableLabel(table, idx);
+  if (meta) meta.textContent = table.kind === "query" ? "数据库查询表配置" : "自定义表配置";
+  if (titleInput && document.activeElement !== titleInput) titleInput.value = table.title || "";
+}
+
+function renderBodyQueryEditor(query) {
+  $("#bodyLimit").value = query.limit || 100;
   renderBodyTableSelect();
   renderOrderColumnSelect();
   renderBodyColumns();
   renderFilters();
-  renderBodyCustomTables();
+}
+
+function renderBodyCustomEditor(table) {
+  const container = $("#bodyCustomTableDesigner");
+  if (!container) return;
+  const tableIndex = state.designer.selectedBodyTable;
+  container.innerHTML = `
+    <table class="designer-table">
+      <tbody>
+        ${table.rows
+          .map(
+            (row, rowIndex) => `
+              <tr>
+                ${row
+                  .map((cell, colIndex) => {
+                    const selected =
+                      state.designer.selectedCell?.region === "body_custom" &&
+                      (state.designer.selectedCell?.tableIndex ?? tableIndex) === tableIndex &&
+                      state.designer.selectedCell?.row === rowIndex &&
+                      state.designer.selectedCell?.col === colIndex;
+                    return `<td><button class="designer-cell ${selected ? "selected" : ""}" data-region="body_custom" data-table-index="${tableIndex}" data-row="${rowIndex}" data-col="${colIndex}">${escapeHtml(cellLabel(cell)) || "&nbsp;"}</button></td>`;
+                  })
+                  .join("")}
+              </tr>`
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
 }
 
 function renderBodyTableSelect() {
   const select = $("#bodyTable");
   if (!select) return;
-  const current = state.designerTemplate.body.table || "";
+  const query = currentBodyQuery();
+  const current = query?.table || "";
   const tables = Array.from(new Set([current, ...(state.designer.schema?.tables || []).map((item) => item.table).filter(Boolean)])).filter(Boolean);
   select.innerHTML = tables.length
     ? tables.map((table) => `<option value="${escapeHtml(table)}">${escapeHtml(table)}</option>`).join("")
@@ -381,15 +645,18 @@ function renderBodyTableSelect() {
 
 function renderOrderColumnSelect() {
   const select = $("#bodyOrderColumn");
-  const current = state.designerTemplate.body.order_by?.[0]?.column || "";
+  if (!select) return;
+  const query = currentBodyQuery();
+  const current = query?.order_by?.[0]?.column || "";
   const columns = allKnownColumns();
   select.innerHTML = `<option value="">不排序</option>${columns.map((column) => `<option value="${escapeHtml(column)}">${escapeHtml(column)}</option>`).join("")}`;
   select.value = current;
-  $("#bodyOrderDirection").value = state.designerTemplate.body.order_by?.[0]?.direction || "ASC";
+  $("#bodyOrderDirection").value = query?.order_by?.[0]?.direction || "ASC";
 }
 
 function renderBodyColumns() {
-  const selected = state.designerTemplate.body.columns || [];
+  const query = currentBodyQuery();
+  const selected = query?.columns || [];
   const knownColumns = allKnownColumns();
   const rows = knownColumns.length ? knownColumns : selected.map((column) => column.name);
   $("#bodyColumnsDesigner").innerHTML = rows
@@ -409,7 +676,8 @@ function renderBodyColumns() {
 
 function renderFilters() {
   const columns = allKnownColumns();
-  const filters = state.designerTemplate.body.filters || [];
+  const query = currentBodyQuery();
+  const filters = query?.filters || [];
   $("#filterDesigner").innerHTML = filters.length
     ? filters
         .map((filter, index) => {
@@ -438,51 +706,95 @@ function renderFilters() {
     : `<div class="empty-note">暂无筛选条件。</div>`;
 }
 
-function selectedBodyCustomTable() {
-  const tables = state.designerTemplate?.body?.custom_tables || [];
-  if (!tables.length) return null;
-  if (state.designer.selectedBodyCustomTable >= tables.length) state.designer.selectedBodyCustomTable = tables.length - 1;
-  if (state.designer.selectedBodyCustomTable < 0) state.designer.selectedBodyCustomTable = 0;
-  return tables[state.designer.selectedBodyCustomTable];
+function addBodyTable(kind) {
+  syncDesignerFromInputs();
+  const tables = state.designerTemplate.body.tables;
+  let entry;
+  if (kind === "custom") {
+    entry = {
+      id: generateTableId("custom"),
+      kind: "custom",
+      title: `自定义表格 ${tables.filter((t) => t.kind === "custom").length + 1}`,
+      rows: [
+        [{ type: "static", value: "名称" }, { type: "static", value: "值" }],
+        [{ type: "static", value: "" }, { type: "static", value: "" }],
+      ],
+    };
+  } else {
+    entry = {
+      id: generateTableId("query"),
+      kind: "query",
+      title: "",
+      table: "",
+      columns: [],
+      filters: [],
+      order_by: [],
+      limit: 100,
+    };
+  }
+  tables.push(entry);
+  state.designer.selectedBodyTable = tables.length - 1;
+  state.designer.bodyEditorOpen = true;
+  state.designer.selectedCell =
+    entry.kind === "custom"
+      ? { region: "body_custom", tableIndex: state.designer.selectedBodyTable, row: 0, col: 0 }
+      : { region: "header", row: 0, col: 0 };
+  renderDesigner();
 }
 
-function renderBodyCustomTables() {
-  const select = $("#bodyCustomTableSelect");
-  const titleInput = $("#bodyCustomTableTitle");
-  const container = $("#bodyCustomTableDesigner");
-  if (!select || !titleInput || !container) return;
-  const tables = state.designerTemplate.body.custom_tables || [];
-  if (!tables.length) {
-    select.innerHTML = `<option value="">暂无自定义表格</option>`;
-    titleInput.value = "";
-    titleInput.disabled = true;
-    container.innerHTML = `<div class="empty-note">点击“添加表格”，可在正文中插入和页眉一样的自定义表格。</div>`;
+function openBodyTableEditor(index) {
+  syncDesignerFromInputs();
+  if (state.designer.bodyEditorOpen && state.designer.selectedBodyTable === Number(index)) {
+    closeBodyTableEditor();
     return;
   }
-  titleInput.disabled = false;
-  select.innerHTML = tables.map((table, index) => `<option value="${index}">${escapeHtml(table.title || `自定义表格 ${index + 1}`)}</option>`).join("");
-  select.value = String(state.designer.selectedBodyCustomTable);
-  const table = selectedBodyCustomTable();
-  titleInput.value = table.title || "";
-  container.innerHTML = `
-    <table class="designer-table">
-      <tbody>
-        ${table.rows
-          .map(
-            (row, rowIndex) => `
-              <tr>
-                ${row
-                  .map((cell, colIndex) => {
-                    const selected = state.designer.selectedCell?.region === "body_custom" && state.designer.selectedCell?.tableIndex === state.designer.selectedBodyCustomTable && state.designer.selectedCell?.row === rowIndex && state.designer.selectedCell?.col === colIndex;
-                    return `<td><button class="designer-cell ${selected ? "selected" : ""}" data-region="body_custom" data-table-index="${state.designer.selectedBodyCustomTable}" data-row="${rowIndex}" data-col="${colIndex}">${escapeHtml(cellLabel(cell)) || "&nbsp;"}</button></td>`;
-                  })
-                  .join("")}
-              </tr>`
-          )
-          .join("")}
-      </tbody>
-    </table>
-  `;
+  state.designer.selectedBodyTable = Number(index);
+  state.designer.bodyEditorOpen = true;
+  const current = currentBodyTable();
+  state.designer.selectedCell =
+    current?.kind === "custom"
+      ? { region: "body_custom", tableIndex: state.designer.selectedBodyTable, row: 0, col: 0 }
+      : { region: "header", row: 0, col: 0 };
+  renderDesigner();
+}
+
+function closeBodyTableEditor() {
+  syncDesignerFromInputs();
+  state.designer.bodyEditorOpen = false;
+  state.designer.selectedCell = { region: "header", row: 0, col: 0 };
+  renderDesigner();
+}
+
+function removeCurrentBodyTable(index = state.designer.selectedBodyTable) {
+  const tables = state.designerTemplate?.body?.tables;
+  if (!tables || !tables.length) return;
+  const idx = Math.max(0, Math.min(Number(index), tables.length - 1));
+  tables.splice(idx, 1);
+  state.designer.selectedBodyTable = Math.max(0, idx - 1);
+  if (!tables.length) state.designer.bodyEditorOpen = false;
+  state.designer.selectedCell = { region: "header", row: 0, col: 0 };
+  renderDesigner();
+}
+
+function moveCurrentBodyTable(direction, index = state.designer.selectedBodyTable) {
+  const tables = state.designerTemplate?.body?.tables;
+  if (!tables || tables.length < 2) return;
+  const idx = Math.max(0, Math.min(Number(index), tables.length - 1));
+  const next = idx + Number(direction);
+  if (next < 0 || next >= tables.length) return;
+  const [item] = tables.splice(idx, 1);
+  tables.splice(next, 0, item);
+  state.designer.selectedBodyTable = next;
+  renderDesigner();
+}
+
+function renameCurrentBodyTable(value) {
+  const current = currentBodyTable();
+  if (!current) return;
+  current.title = value;
+  syncJsonEditor();
+  renderBodyTablesList();
+  renderBodyDetailHeader(current);
 }
 
 function renderPropertyPanel() {
@@ -548,6 +860,30 @@ function opcuaNodeOptions(current = "") {
   }).join("");
 }
 
+function renderSourceSelectHtml(currentId) {
+  const queries = queryTables();
+  if (!queries.length) return "";
+  const options = queries
+    .map((q) => {
+      const label = q.title || q.table || q.id;
+      return `<option value="${escapeHtml(q.id)}" ${q.id === currentId ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    })
+    .join("");
+  // If currentId not matching, leave first selected (no-op since none has selected attr).
+  return options;
+}
+
+function columnsForSource(sourceId) {
+  const queries = queryTables();
+  if (!queries.length) return [];
+  const target = (sourceId && queries.find((q) => q.id === sourceId)) || queries[0];
+  const fromQuery = (target.columns || []).map((c) => c.name).filter(Boolean);
+  const schemaCols = (state.designer.schema?.tables || [])
+    .find((item) => item.table === target.table)?.columns || [];
+  const fromSchema = schemaCols.map((c) => c.Field || c.name).filter(Boolean);
+  return Array.from(new Set([...fromQuery, ...fromSchema]));
+}
+
 function renderCellPropertyFields() {
   const cell = getSelectedCell();
   const container = $("#cellPropertyFields");
@@ -572,19 +908,26 @@ function renderCellPropertyFields() {
     $("#cellNodeManual").addEventListener("input", (event) => {
       cell.node_id = event.target.value;
       syncJsonEditor();
-      if (state.designer.selectedCell.region === "body_custom") renderBodyCustomTables();
+      if (state.designer.selectedCell.region === "body_custom") renderBodyDesigner();
       else renderRegionTable(state.designer.selectedCell.region);
     });
     $("#browseTplOpcFromCellBtn").addEventListener("click", browseTemplateOpc);
     return;
   }
   if (cell.type === "db_field") {
+    const sourceOptions = renderSourceSelectHtml(cell.source_id);
+    const sourceColumns = columnsForSource(cell.source_id);
     container.innerHTML = `
+      ${sourceOptions ? `<label class="field"><span>来源查询表</span><select id="cellSourceId">${sourceOptions}</select></label>` : ""}
       <label class="field">
         <span>字段</span>
-        <select id="cellDbField">${columns.map((column) => `<option value="${escapeHtml(column)}" ${cell.column === column ? "selected" : ""}>${escapeHtml(column)}</option>`).join("")}</select>
+        <select id="cellDbField">${(sourceColumns.length ? sourceColumns : columns).map((column) => `<option value="${escapeHtml(column)}" ${cell.column === column ? "selected" : ""}>${escapeHtml(column)}</option>`).join("")}</select>
       </label>
     `;
+    $("#cellSourceId")?.addEventListener("change", (event) => {
+      cell.source_id = event.target.value || undefined;
+      setSelectedCell(cell);
+    });
     $("#cellDbField").addEventListener("change", (event) => {
       cell.column = event.target.value;
       setSelectedCell(cell);
@@ -592,7 +935,10 @@ function renderCellPropertyFields() {
     return;
   }
   if (cell.type === "db_summary") {
+    const sourceOptions = renderSourceSelectHtml(cell.source_id);
+    const sourceColumns = columnsForSource(cell.source_id);
     container.innerHTML = `
+      ${sourceOptions ? `<label class="field"><span>来源查询表</span><select id="cellSourceId">${sourceOptions}</select></label>` : ""}
       <label class="field">
         <span>统计方式</span>
         <select id="cellAggregate">
@@ -603,9 +949,13 @@ function renderCellPropertyFields() {
       </label>
       <label class="field">
         <span>字段</span>
-        <select id="cellSummaryColumn">${columns.map((column) => `<option value="${escapeHtml(column)}" ${cell.column === column ? "selected" : ""}>${escapeHtml(column)}</option>`).join("")}</select>
+        <select id="cellSummaryColumn">${(sourceColumns.length ? sourceColumns : columns).map((column) => `<option value="${escapeHtml(column)}" ${cell.column === column ? "selected" : ""}>${escapeHtml(column)}</option>`).join("")}</select>
       </label>
     `;
+    $("#cellSourceId")?.addEventListener("change", (event) => {
+      cell.source_id = event.target.value || undefined;
+      setSelectedCell(cell);
+    });
     $("#cellAggregate").addEventListener("change", (event) => {
       cell.aggregate = event.target.value;
       setSelectedCell(cell);
@@ -625,17 +975,19 @@ function renderCellPropertyFields() {
   $("#cellStaticValue").addEventListener("input", (event) => {
     cell.value = event.target.value;
     syncJsonEditor();
-    if (state.designer.selectedCell.region === "body_custom") renderBodyCustomTables();
+    if (state.designer.selectedCell.region === "body_custom") renderBodyDesigner();
     else renderRegionTable(state.designer.selectedCell.region);
   });
 }
 
 function mutateRegionTable(region, action) {
   let rows;
+  let tableIndex;
   if (region === "body_custom") {
-    const table = selectedBodyCustomTable();
-    if (!table) return;
-    rows = table.rows;
+    const current = currentBodyTable();
+    if (!current || current.kind !== "custom") return;
+    rows = current.rows;
+    tableIndex = state.designer.selectedBodyTable;
   } else {
     rows = state.designerTemplate[region].rows;
   }
@@ -644,42 +996,20 @@ function mutateRegionTable(region, action) {
   if (action === "add-col") rows.forEach((row) => row.push({ type: "static", value: "" }));
   if (action === "remove-row" && rows.length > 1) rows.pop();
   if (action === "remove-col" && colCount > 1) rows.forEach((row) => row.pop());
-  state.designer.selectedCell = { region, tableIndex: region === "body_custom" ? state.designer.selectedBodyCustomTable : undefined, row: 0, col: 0 };
+  state.designer.selectedCell = { region, tableIndex, row: 0, col: 0 };
   renderDesigner();
 }
 
 function addBodyCustomTable() {
-  syncDesignerFromInputs();
-  const tables = state.designerTemplate.body.custom_tables;
-  tables.push({
-    title: `自定义表格 ${tables.length + 1}`,
-    rows: [
-      [{ type: "static", value: "名称" }, { type: "static", value: "值" }],
-      [{ type: "static", value: "" }, { type: "static", value: "" }],
-    ],
-  });
-  state.designer.selectedBodyCustomTable = tables.length - 1;
-  state.designer.selectedCell = { region: "body_custom", tableIndex: state.designer.selectedBodyCustomTable, row: 0, col: 0 };
-  renderDesigner();
+  addBodyTable("custom");
+}
+
+function addBodyQueryTable() {
+  addBodyTable("query");
 }
 
 function removeBodyCustomTable() {
-  const tables = state.designerTemplate.body.custom_tables;
-  if (!tables.length) return;
-  tables.splice(state.designer.selectedBodyCustomTable, 1);
-  state.designer.selectedBodyCustomTable = Math.max(0, state.designer.selectedBodyCustomTable - 1);
-  state.designer.selectedCell = tables.length
-    ? { region: "body_custom", tableIndex: state.designer.selectedBodyCustomTable, row: 0, col: 0 }
-    : { region: "header", row: 0, col: 0 };
-  renderDesigner();
-}
-
-function renameBodyCustomTable(value) {
-  const table = selectedBodyCustomTable();
-  if (!table) return;
-  table.title = value;
-  syncJsonEditor();
-  renderBodyCustomTables();
+  removeCurrentBodyTable();
 }
 
 async function loadHealth() {
@@ -902,7 +1232,8 @@ function newTemplate() {
   state.designerTemplate = ensureTemplateShape(base);
   state.designerTemplate.name = "新建报表模板";
   state.designer.selectedCell = { region: "header", row: 0, col: 0 };
-  state.designer.selectedBodyCustomTable = 0;
+  state.designer.selectedBodyTable = 0;
+  state.designer.bodyEditorOpen = false;
   renderTemplateList();
   renderDesigner();
 }
@@ -958,8 +1289,11 @@ async function loadTemplateSchema() {
       method: "POST",
       body: JSON.stringify(templateDbConnection()),
     });
-    const firstTable = state.designer.schema.tables?.find((item) => item.table === state.designerTemplate.body.table) || state.designer.schema.tables?.[0];
-    if (!state.designerTemplate.body.table && firstTable) state.designerTemplate.body.table = firstTable.table;
+    const query = currentBodyQuery();
+    if (query) {
+      const firstTable = state.designer.schema.tables?.find((item) => item.table === query.table) || state.designer.schema.tables?.[0];
+      if (!query.table && firstTable) query.table = firstTable.table;
+    }
     renderDesigner();
     setStatus("#templateStatus", "表结构已加载");
   } catch (error) {
@@ -981,7 +1315,9 @@ async function testTemplateDb() {
 }
 
 function mutateColumn(name, action, value) {
-  const columns = state.designerTemplate.body.columns;
+  const query = currentBodyQuery();
+  if (!query) return;
+  const columns = query.columns;
   const index = columns.findIndex((column) => column.name === name);
   if (action === "toggle") {
     if (index >= 0) columns.splice(index, 1);
@@ -1003,7 +1339,9 @@ function mutateColumn(name, action, value) {
 }
 
 function mutateFilter(index, key, value) {
-  const filters = state.designerTemplate.body.filters;
+  const query = currentBodyQuery();
+  if (!query) return;
+  const filters = query.filters;
   const filter = filters[index];
   if (!filter) return;
   if (key === "remove") filters.splice(index, 1);
@@ -1024,8 +1362,10 @@ function mutateFilter(index, key, value) {
 }
 
 function addFilter() {
-  const firstColumn = allKnownColumns()[0] || state.designerTemplate.body.columns[0]?.name || "";
-  state.designerTemplate.body.filters.push({ column: firstColumn, operator: "=", source: { type: "literal", value: "" } });
+  const query = currentBodyQuery();
+  if (!query) return;
+  const firstColumn = allKnownColumns()[0] || query.columns[0]?.name || "";
+  query.filters.push({ column: firstColumn, operator: "=", source: { type: "literal", value: "" } });
   renderDesigner();
 }
 
@@ -1311,7 +1651,8 @@ function bindDesignerEvents() {
     if (cell) {
       state.designer.selectedCell = { region: cell.dataset.region, tableIndex: Number(cell.dataset.tableIndex || 0), row: Number(cell.dataset.row), col: Number(cell.dataset.col) };
       if (cell.dataset.region === "body_custom") {
-        state.designer.selectedBodyCustomTable = Number(cell.dataset.tableIndex || 0);
+        state.designer.selectedBodyTable = Number(cell.dataset.tableIndex || 0);
+        state.designer.bodyEditorOpen = true;
         state.designer.activeTab = "body";
       } else {
         state.designer.activeTab = cell.dataset.region;
@@ -1322,6 +1663,21 @@ function bindDesignerEvents() {
     const tableAction = event.target.closest("[data-table-action]");
     if (tableAction) {
       mutateRegionTable(tableAction.dataset.region, tableAction.dataset.tableAction);
+      return;
+    }
+    const openBodyTable = event.target.closest("[data-body-table-open]");
+    if (openBodyTable) {
+      openBodyTableEditor(Number(openBodyTable.dataset.bodyTableOpen));
+      return;
+    }
+    const moveBodyTable = event.target.closest("[data-body-table-move]");
+    if (moveBodyTable) {
+      moveCurrentBodyTable(Number(moveBodyTable.dataset.dir), Number(moveBodyTable.dataset.bodyTableMove));
+      return;
+    }
+    const removeBodyTable = event.target.closest("[data-body-table-remove]");
+    if (removeBodyTable) {
+      removeCurrentBodyTable(Number(removeBodyTable.dataset.bodyTableRemove));
       return;
     }
     const toggle = event.target.closest("[data-column-toggle]");
@@ -1388,14 +1744,9 @@ function bindDesignerEvents() {
     if (event.target.matches("[data-filter-node]")) mutateFilter(Number(event.target.dataset.filterNode), "node", event.target.value);
   });
 
-  $("#bodyCustomTableSelect")?.addEventListener("change", (event) => {
-    state.designer.selectedBodyCustomTable = Number(event.target.value || 0);
-    state.designer.selectedCell = { region: "body_custom", tableIndex: state.designer.selectedBodyCustomTable, row: 0, col: 0 };
-    renderDesigner();
-  });
-  $("#bodyCustomTableTitle")?.addEventListener("input", (event) => renameBodyCustomTable(event.target.value));
-  $("#addBodyCustomTableBtn")?.addEventListener("click", addBodyCustomTable);
-  $("#removeBodyCustomTableBtn")?.addEventListener("click", removeBodyCustomTable);
+  $("#bodyTableTitle")?.addEventListener("input", (event) => renameCurrentBodyTable(event.target.value));
+  $("#insertBodyTableBtn")?.addEventListener("click", () => addBodyTable($("#bodyInsertKind")?.value || "query"));
+  $("#closeBodyTableEditorBtn")?.addEventListener("click", closeBodyTableEditor);
   $("#loadSchemaBtn").addEventListener("click", loadTemplateSchema);
   $("#addFilterBtn").addEventListener("click", addFilter);
   $("#browseTplOpcBtn")?.addEventListener("click", browseTemplateOpc);

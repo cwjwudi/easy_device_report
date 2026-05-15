@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表生成程序</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20260515-1145">
   </head>
   <body>
     <aside class="sidebar">
@@ -113,59 +113,82 @@
             </div>
 
             <div class="designer-tab" id="tab-body">
-              <div class="form-grid">
+              <div class="body-insert-panel">
                 <label class="field">
-                  <span>查询表</span>
-                  <select id="bodyTable"></select>
-                </label>
-                <label class="field">
-                  <span>返回行数</span>
-                  <input id="bodyLimit" type="number" min="1" max="1000">
-                </label>
-                <label class="field">
-                  <span>排序字段</span>
-                  <select id="bodyOrderColumn"></select>
-                </label>
-                <label class="field">
-                  <span>排序方向</span>
-                  <select id="bodyOrderDirection">
-                    <option value="ASC">升序</option>
-                    <option value="DESC">降序</option>
+                  <span>插入表格类型</span>
+                  <select id="bodyInsertKind">
+                    <option value="query">数据库查询表</option>
+                    <option value="custom">自定义表</option>
                   </select>
                 </label>
+                <button id="insertBodyTableBtn">插入表格</button>
               </div>
-              <div class="designer-toolbar">
-                <strong>字段选择</strong>
-                <button class="secondary" id="loadSchemaBtn">加载表结构</button>
+
+              <div class="body-list-head">
+                <strong>正文表格列表</strong>
+                <span>按列表顺序生成正文内容，点击“配置”进入二级设置。</span>
               </div>
-              <div id="bodyColumnsDesigner" class="column-designer"></div>
-              <div class="designer-toolbar">
-                <strong>筛选条件</strong>
-                <button class="secondary" id="addFilterBtn">添加条件</button>
-              </div>
-              <div id="filterDesigner" class="filter-designer"></div>
-              <div class="designer-toolbar">
-                <strong>自定义正文表格</strong>
-                <button class="secondary" id="addBodyCustomTableBtn">添加表格</button>
-              </div>
-              <div class="custom-table-bar">
-                <label class="field">
-                  <span>当前表格</span>
-                  <select id="bodyCustomTableSelect"></select>
+              <div id="bodyTableList" class="body-table-list"></div>
+              <div id="bodyTablesEmpty" class="empty-note">尚未添加任何正文表格，请先插入数据库查询表或自定义表。</div>
+
+              <div id="bodyTableDetail" class="body-detail-panel">
+                <div class="body-detail-head">
+                  <div>
+                    <strong id="bodyTableDetailTitle">当前表格配置</strong>
+                    <span id="bodyTableDetailMeta"></span>
+                  </div>
+                  <button class="secondary" id="closeBodyTableEditorBtn">收起配置</button>
+                </div>
+                <label class="field compact-field">
+                  <span>显示标题</span>
+                  <input id="bodyTableTitle" placeholder="可留空">
                 </label>
-                <label class="field">
-                  <span>表格名称</span>
-                  <input id="bodyCustomTableTitle">
-                </label>
+
+                <div id="bodyQueryEditor" class="body-subpanel">
+                  <div class="form-grid">
+                    <label class="field">
+                      <span>查询表</span>
+                      <select id="bodyTable"></select>
+                    </label>
+                    <label class="field">
+                      <span>返回行数</span>
+                      <input id="bodyLimit" type="number" min="1" max="1000">
+                    </label>
+                    <label class="field">
+                      <span>排序字段</span>
+                      <select id="bodyOrderColumn"></select>
+                    </label>
+                    <label class="field">
+                      <span>排序方向</span>
+                      <select id="bodyOrderDirection">
+                        <option value="ASC">升序</option>
+                        <option value="DESC">降序</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="designer-toolbar">
+                    <strong>字段选择</strong>
+                    <button class="secondary" id="loadSchemaBtn">加载表结构</button>
+                  </div>
+                  <div id="bodyColumnsDesigner" class="column-designer"></div>
+                  <div class="designer-toolbar">
+                    <strong>筛选条件</strong>
+                    <button class="secondary" id="addFilterBtn">添加条件</button>
+                  </div>
+                  <div id="filterDesigner" class="filter-designer"></div>
+                </div>
+
+                <div id="bodyCustomEditor" class="body-subpanel">
+                  <div class="designer-toolbar">
+                    <strong>自定义表格单元格</strong>
+                    <button class="secondary" data-region="body_custom" data-table-action="add-row">加行</button>
+                    <button class="secondary" data-region="body_custom" data-table-action="add-col">加列</button>
+                    <button class="secondary" data-region="body_custom" data-table-action="remove-row">删行</button>
+                    <button class="secondary" data-region="body_custom" data-table-action="remove-col">删列</button>
+                  </div>
+                  <div id="bodyCustomTableDesigner" class="table-designer"></div>
+                </div>
               </div>
-              <div class="designer-toolbar">
-                <button class="secondary" data-region="body_custom" data-table-action="add-row">加行</button>
-                <button class="secondary" data-region="body_custom" data-table-action="add-col">加列</button>
-                <button class="secondary" data-region="body_custom" data-table-action="remove-row">删行</button>
-                <button class="secondary" data-region="body_custom" data-table-action="remove-col">删列</button>
-                <button class="danger" id="removeBodyCustomTableBtn">删除当前表格</button>
-              </div>
-              <div id="bodyCustomTableDesigner" class="table-designer"></div>
             </div>
 
             <div class="designer-tab" id="tab-footer">
@@ -328,6 +351,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260515-1145"></script>
   </body>
 </html>

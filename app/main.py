@@ -420,6 +420,67 @@ def get_template(template_id: int) -> dict[str, Any]:
     return config
 
 
+def normalize_body_tables(body: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a normalized list of body tables (mix of query/custom items).
+
+    Backwards compatible with the legacy layout where ``body`` holds a single
+    query (table/columns/filters/order_by/limit) plus a ``custom_tables`` list.
+    """
+
+    raw = body.get("tables")
+    if isinstance(raw, list) and raw:
+        result: list[dict[str, Any]] = []
+        for index, item in enumerate(raw):
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("kind")
+            entry: dict[str, Any] = {
+                "id": str(item.get("id") or f"t_{index}"),
+                "title": item.get("title") or "",
+            }
+            if kind == "custom":
+                entry["kind"] = "custom"
+                entry["rows"] = item.get("rows", [])
+            else:
+                entry["kind"] = "query"
+                entry["table"] = item.get("table", "")
+                entry["columns"] = item.get("columns", [])
+                entry["filters"] = item.get("filters", [])
+                entry["order_by"] = item.get("order_by", [])
+                entry["limit"] = item.get("limit", 500)
+            result.append(entry)
+        return result
+
+    # Legacy layout: synthesize a tables list.
+    legacy: list[dict[str, Any]] = []
+    has_query = any(body.get(key) for key in ("table", "columns", "filters", "order_by")) or "limit" in body
+    if has_query:
+        legacy.append(
+            {
+                "id": "t_query_legacy",
+                "kind": "query",
+                "title": "",
+                "table": body.get("table", ""),
+                "columns": body.get("columns", []),
+                "filters": body.get("filters", []),
+                "order_by": body.get("order_by", []),
+                "limit": body.get("limit", 500),
+            }
+        )
+    for index, table in enumerate(body.get("custom_tables", []) or []):
+        if not isinstance(table, dict):
+            continue
+        legacy.append(
+            {
+                "id": f"t_custom_legacy_{index}",
+                "kind": "custom",
+                "title": table.get("title", ""),
+                "rows": table.get("rows", []),
+            }
+        )
+    return legacy
+
+
 def collect_opcua_nodes(template: dict[str, Any]) -> list[str]:
     nodes: set[str] = set()
     for region_name in ("header", "footer"):
@@ -427,19 +488,27 @@ def collect_opcua_nodes(template: dict[str, Any]) -> list[str]:
             for cell in row:
                 if isinstance(cell, dict) and cell.get("type") == "opcua" and cell.get("node_id"):
                     nodes.add(str(cell["node_id"]))
-    for table in template.get("body", {}).get("custom_tables", []):
-        for row in table.get("rows", []):
-            for cell in row:
-                if isinstance(cell, dict) and cell.get("type") == "opcua" and cell.get("node_id"):
-                    nodes.add(str(cell["node_id"]))
-    for filter_item in template.get("body", {}).get("filters", []):
-        source = filter_item.get("source") or {}
-        if source.get("type") == "opcua" and source.get("node_id"):
-            nodes.add(str(source["node_id"]))
+    body = template.get("body", {}) or {}
+    for item in normalize_body_tables(body):
+        if item["kind"] == "custom":
+            for row in item.get("rows", []):
+                for cell in row:
+                    if isinstance(cell, dict) and cell.get("type") == "opcua" and cell.get("node_id"):
+                        nodes.add(str(cell["node_id"]))
+        else:
+            for filter_item in item.get("filters", []) or []:
+                source = (filter_item or {}).get("source") or {}
+                if source.get("type") == "opcua" and source.get("node_id"):
+                    nodes.add(str(source["node_id"]))
     return sorted(nodes)
 
 
-def resolve_cell(cell: Any, opcua_values: dict[str, Any], body_rows: list[dict[str, Any]]) -> Any:
+def resolve_cell(
+    cell: Any,
+    opcua_values: dict[str, Any],
+    body_rows: list[dict[str, Any]],
+    rows_by_source: dict[str, list[dict[str, Any]]] | None = None,
+) -> Any:
     if not isinstance(cell, dict):
         return cell
     cell_type = cell.get("type", "static")
@@ -447,25 +516,34 @@ def resolve_cell(cell: Any, opcua_values: dict[str, Any], body_rows: list[dict[s
         return cell.get("value", "")
     if cell_type == "opcua":
         return opcua_values.get(str(cell.get("node_id", "")), "")
+    source_id = cell.get("source_id")
+    rows = body_rows
+    if source_id and rows_by_source and source_id in rows_by_source:
+        rows = rows_by_source[source_id]
     if cell_type == "db_summary":
         aggregate = cell.get("aggregate", "count")
         column = cell.get("column")
         if aggregate == "count":
-            return len(body_rows)
+            return len(rows)
         if aggregate == "sum" and column:
-            return round(sum(float(row.get(column) or 0) for row in body_rows), 4)
-        if aggregate == "avg" and column and body_rows:
-            values = [float(row.get(column) or 0) for row in body_rows]
+            return round(sum(float(row.get(column) or 0) for row in rows), 4)
+        if aggregate == "avg" and column and rows:
+            values = [float(row.get(column) or 0) for row in rows]
             return round(sum(values) / len(values), 4)
-    if cell_type == "db_field" and body_rows:
-        return body_rows[0].get(str(cell.get("column", "")), "")
+    if cell_type == "db_field" and rows:
+        return rows[0].get(str(cell.get("column", "")), "")
     return ""
 
 
-def render_region(region: dict[str, Any], opcua_values: dict[str, Any], body_rows: list[dict[str, Any]]) -> dict[str, Any]:
+def render_region(
+    region: dict[str, Any],
+    opcua_values: dict[str, Any],
+    body_rows: list[dict[str, Any]],
+    rows_by_source: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     rows = []
     for row in region.get("rows", []):
-        rows.append([resolve_cell(cell, opcua_values, body_rows) for cell in row])
+        rows.append([resolve_cell(cell, opcua_values, body_rows, rows_by_source) for cell in row])
     return {"title": region.get("title", ""), "rows": rows}
 
 
@@ -474,20 +552,77 @@ async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
     nodes = collect_opcua_nodes(template)
     opcua_values = await read_opcua_values(opcua_config, nodes)
 
-    body = template.get("body", {})
-    query_request = QueryPreviewRequest(
-        connection=DatabaseConnection(**template.get("database", {})),
-        table=body.get("table", "production_records"),
-        columns=[column.get("name") if isinstance(column, dict) else column for column in body.get("columns", [])],
-        filters=body.get("filters", []),
-        order_by=body.get("order_by", []),
-        limit=int(body.get("limit", 500)),
-        opcua_values=opcua_values,
-    )
-    body_result = run_query(query_request)
-    label_map = {column["name"]: column["label"] for column in normalize_columns(body.get("columns", []))}
-    body_columns = [{"name": c["name"], "label": label_map.get(c["name"], c["label"])} for c in body_result["columns"]]
-    custom_tables = [render_region(table, opcua_values, body_result["rows"]) for table in body.get("custom_tables", [])]
+    body = template.get("body", {}) or {}
+    body_items = normalize_body_tables(body)
+
+    # Execute each query item; collect rows keyed by item id (for db_field/db_summary lookup).
+    rows_by_source: dict[str, list[dict[str, Any]]] = {}
+    query_outputs: dict[str, dict[str, Any]] = {}
+    first_query_rows: list[dict[str, Any]] = []
+    connection_payload = template.get("database", {}) or {}
+
+    for item in body_items:
+        if item["kind"] != "query":
+            continue
+        query_request = QueryPreviewRequest(
+            connection=DatabaseConnection(**connection_payload),
+            table=item.get("table") or "production_records",
+            columns=[column.get("name") if isinstance(column, dict) else column for column in item.get("columns", [])],
+            filters=item.get("filters", []),
+            order_by=item.get("order_by", []),
+            limit=int(item.get("limit", 500) or 500),
+            opcua_values=opcua_values,
+        )
+        result = run_query(query_request)
+        label_map = {column["name"]: column["label"] for column in normalize_columns(item.get("columns", []))}
+        result_columns = [
+            {"name": c["name"], "label": label_map.get(c["name"], c["label"])} for c in result["columns"]
+        ]
+        query_outputs[item["id"]] = {
+            "columns": result_columns,
+            "rows": result["rows"],
+            "sql": result["sql"],
+            "row_count": result["row_count"],
+        }
+        rows_by_source[item["id"]] = result["rows"]
+        if not first_query_rows:
+            first_query_rows = result["rows"]
+
+    # Build the ordered output table list (mirrors template order).
+    out_tables: list[dict[str, Any]] = []
+    legacy_custom: list[dict[str, Any]] = []
+    for item in body_items:
+        if item["kind"] == "query":
+            q = query_outputs.get(item["id"], {"columns": [], "rows": [], "sql": "", "row_count": 0})
+            out_tables.append(
+                {
+                    "id": item["id"],
+                    "kind": "query",
+                    "title": item.get("title", ""),
+                    "table": item.get("table", ""),
+                    "columns": q["columns"],
+                    "rows": q["rows"],
+                    "sql": q["sql"],
+                    "row_count": q["row_count"],
+                }
+            )
+        else:
+            rendered = render_region(item, opcua_values, first_query_rows, rows_by_source)
+            entry = {
+                "id": item["id"],
+                "kind": "custom",
+                "title": item.get("title", ""),
+                "rows": rendered["rows"],
+            }
+            out_tables.append(entry)
+            legacy_custom.append({"title": entry["title"], "rows": entry["rows"]})
+
+    # Legacy fields: first query result populates body.columns/rows/sql/row_count.
+    first_query_output = next((t for t in out_tables if t["kind"] == "query"), None)
+    legacy_columns = first_query_output["columns"] if first_query_output else []
+    legacy_rows = first_query_output["rows"] if first_query_output else []
+    legacy_sql = first_query_output["sql"] if first_query_output else ""
+    legacy_row_count = first_query_output["row_count"] if first_query_output else 0
 
     report = {
         "template_id": template.get("id"),
@@ -495,9 +630,16 @@ async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
         "generated_at": now_iso(),
         "page": template.get("page", {}),
         "opcua_values": opcua_values,
-        "header": render_region(template.get("header", {}), opcua_values, body_result["rows"]),
-        "body": {"columns": body_columns, "rows": body_result["rows"], "sql": body_result["sql"], "row_count": body_result["row_count"], "custom_tables": custom_tables},
-        "footer": render_region(template.get("footer", {}), opcua_values, body_result["rows"]),
+        "header": render_region(template.get("header", {}), opcua_values, first_query_rows, rows_by_source),
+        "body": {
+            "tables": out_tables,
+            "columns": legacy_columns,
+            "rows": legacy_rows,
+            "sql": legacy_sql,
+            "row_count": legacy_row_count,
+            "custom_tables": legacy_custom,
+        },
+        "footer": render_region(template.get("footer", {}), opcua_values, first_query_rows, rows_by_source),
     }
     return make_jsonable(report)
 
@@ -510,16 +652,36 @@ def report_to_html(report: dict[str, Any]) -> str:
     def simple_table(rows: list[list[Any]]) -> str:
         return "<table>" + "".join("<tr>" + "".join(f"<td>{html_escape(cell)}</td>" for cell in row) + "</tr>" for row in rows) + "</table>"
 
-    def custom_tables(tables: list[dict[str, Any]]) -> str:
-        html = []
-        for table in tables:
+    def query_table_html(columns: list[dict[str, Any]], rows: list[dict[str, Any]]) -> str:
+        head = "<thead><tr>" + "".join(f"<th>{html_escape(c.get('label', c.get('name', '')))}</th>" for c in columns) + "</tr></thead>"
+        body_rows = "".join(
+            "<tr>" + "".join(f"<td>{html_escape(row.get(c.get('name', ''), ''))}</td>" for c in columns) + "</tr>"
+            for row in rows
+        )
+        return f"<table>{head}<tbody>{body_rows}</tbody></table>"
+
+    def body_tables_html(tables: list[dict[str, Any]]) -> str:
+        chunks: list[str] = []
+        for table in tables or []:
             title = f"<h2>{html_escape(table.get('title', ''))}</h2>" if table.get("title") else ""
-            html.append(f"<section>{title}{simple_table(table.get('rows', []))}</section>")
-        return "".join(html)
+            if table.get("kind") == "query":
+                chunks.append(f"<section>{title}{query_table_html(table.get('columns', []), table.get('rows', []))}</section>")
+            else:
+                chunks.append(f"<section>{title}{simple_table(table.get('rows', []))}</section>")
+        return "".join(chunks)
 
     body = report["body"]
-    header = "<thead><tr>" + "".join(f"<th>{html_escape(c['label'])}</th>" for c in body["columns"]) + "</tr></thead>"
-    rows = "".join("<tr>" + "".join(f"<td>{html_escape(row.get(c['name'], ''))}</td>" for c in body["columns"]) + "</tr>" for row in body["rows"])
+    tables = body.get("tables")
+    if not tables:
+        # Legacy fallback: render custom tables then a single query table.
+        legacy_custom = "".join(
+            f"<section>{('<h2>' + html_escape(t.get('title', '')) + '</h2>') if t.get('title') else ''}{simple_table(t.get('rows', []))}</section>"
+            for t in body.get("custom_tables", [])
+        )
+        legacy_query = query_table_html(body.get("columns", []), body.get("rows", []))
+        body_html = legacy_custom + legacy_query
+    else:
+        body_html = body_tables_html(tables)
     return f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -532,6 +694,7 @@ def report_to_html(report: dict[str, Any]) -> str:
     th, td {{ border: 1px solid #9aa5b1; padding: 7px 9px; font-size: 12px; }}
     th {{ background: #eef2f6; }}
     h1 {{ font-size: 20px; margin: 0 0 12px; }}
+    h2 {{ font-size: 14px; margin: 12px 0 4px; }}
     .meta {{ color: #5c6676; font-size: 12px; }}
   </style>
 </head>
@@ -539,8 +702,7 @@ def report_to_html(report: dict[str, Any]) -> str:
   <h1>{html_escape(report['name'])}</h1>
   <div class="meta">Generated at {html_escape(report['generated_at'])}</div>
   {simple_table(report['header']['rows'])}
-  {custom_tables(body.get('custom_tables', []))}
-  <table>{header}<tbody>{rows}</tbody></table>
+  {body_html}
   {simple_table(report['footer']['rows'])}
 </body>
 </html>
@@ -557,19 +719,37 @@ def make_excel(report: dict[str, Any]) -> bytes:
     for row in report["header"]["rows"]:
         ws.append(row)
     ws.append([])
-    for table in report["body"].get("custom_tables", []):
-        if table.get("title"):
-            ws.append([table["title"]])
-        for row in table.get("rows", []):
-            ws.append(row)
+
+    def append_query(columns: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+        if not columns:
+            return
+        ws.append([column.get("label", column.get("name", "")) for column in columns])
+        for cell in ws[ws.max_row]:
+            cell.font = Font(bold=True)
+            cell.fill = PatternFill("solid", fgColor="E8EEF6")
+        for item in rows:
+            ws.append([item.get(column.get("name", ""), "") for column in columns])
         ws.append([])
-    ws.append([column["label"] for column in report["body"]["columns"]])
-    for cell in ws[ws.max_row]:
-        cell.font = Font(bold=True)
-        cell.fill = PatternFill("solid", fgColor="E8EEF6")
-    for item in report["body"]["rows"]:
-        ws.append([item.get(column["name"], "") for column in report["body"]["columns"]])
-    ws.append([])
+
+    tables = report["body"].get("tables")
+    if tables:
+        for table in tables:
+            if table.get("title"):
+                ws.append([table["title"]])
+            if table.get("kind") == "query":
+                append_query(table.get("columns", []), table.get("rows", []))
+            else:
+                for row in table.get("rows", []):
+                    ws.append(row)
+                ws.append([])
+    else:
+        for table in report["body"].get("custom_tables", []):
+            if table.get("title"):
+                ws.append([table["title"]])
+            for row in table.get("rows", []):
+                ws.append(row)
+            ws.append([])
+        append_query(report["body"].get("columns", []), report["body"].get("rows", []))
     for row in report["footer"]["rows"]:
         ws.append(row)
     for row in ws.iter_rows():
@@ -611,13 +791,29 @@ def make_pdf(report: dict[str, Any]) -> bytes:
         elements.extend([table, Spacer(1, 8)])
 
     add_table(report["header"]["rows"])
-    for table in report["body"].get("custom_tables", []):
-        if table.get("title"):
-            elements.append(Paragraph(str(table["title"]), styles["Normal"]))
-        add_table(table.get("rows", []))
-    body_rows = [[column["label"] for column in report["body"]["columns"]]]
-    body_rows += [[row.get(column["name"], "") for column in report["body"]["columns"]] for row in report["body"]["rows"]]
-    add_table(body_rows, header=True)
+
+    def query_to_rows(columns: list[dict[str, Any]], data_rows: list[dict[str, Any]]) -> list[list[Any]]:
+        if not columns:
+            return []
+        header_row = [column.get("label", column.get("name", "")) for column in columns]
+        body = [[row.get(column.get("name", ""), "") for column in columns] for row in data_rows]
+        return [header_row] + body
+
+    tables = report["body"].get("tables")
+    if tables:
+        for table in tables:
+            if table.get("title"):
+                elements.append(Paragraph(str(table["title"]), styles["Normal"]))
+            if table.get("kind") == "query":
+                add_table(query_to_rows(table.get("columns", []), table.get("rows", [])), header=True)
+            else:
+                add_table(table.get("rows", []))
+    else:
+        for table in report["body"].get("custom_tables", []):
+            if table.get("title"):
+                elements.append(Paragraph(str(table["title"]), styles["Normal"]))
+            add_table(table.get("rows", []))
+        add_table(query_to_rows(report["body"].get("columns", []), report["body"].get("rows", [])), header=True)
     add_table(report["footer"]["rows"])
     doc.build(elements)
     return stream.getvalue()

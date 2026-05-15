@@ -66,6 +66,71 @@ class ReportAppTests(unittest.TestCase):
         self.assertEqual(table["rows"][0][0], "row count")
         self.assertGreaterEqual(table["rows"][0][1], 1)
 
+    def test_generate_body_tables_multi_query(self):
+        templates = self.client.get("/api/report-templates").json()
+        template = next(item for item in templates if item["config"]["database"]["type"] == "sqlite")["config"]
+        legacy = template["body"]
+        template["body"] = {
+            "tables": [
+                {
+                    "id": "q_main",
+                    "kind": "query",
+                    "title": "主查询",
+                    "table": legacy.get("table", "production_records"),
+                    "columns": legacy.get("columns", []),
+                    "filters": legacy.get("filters", []),
+                    "order_by": legacy.get("order_by", []),
+                    "limit": legacy.get("limit", 100),
+                },
+                {
+                    "id": "q_alt",
+                    "kind": "query",
+                    "title": "辅查询",
+                    "table": legacy.get("table", "production_records"),
+                    "columns": legacy.get("columns", []),
+                    "filters": [],
+                    "order_by": [],
+                    "limit": 5,
+                },
+                {
+                    "id": "c_one",
+                    "kind": "custom",
+                    "title": "自定义表",
+                    "rows": [
+                        [
+                            {"type": "static", "value": "main count"},
+                            {"type": "db_summary", "aggregate": "count", "source_id": "q_main"},
+                        ],
+                        [
+                            {"type": "static", "value": "alt count"},
+                            {"type": "db_summary", "aggregate": "count", "source_id": "q_alt"},
+                        ],
+                        [
+                            {"type": "static", "value": "alt first line"},
+                            {"type": "db_field", "column": "line_name", "source_id": "q_alt"},
+                        ],
+                    ],
+                },
+            ]
+        }
+        response = self.client.post("/api/reports/generate", json={"template": template, "persist_run": False})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()["body"]
+        self.assertIn("tables", body)
+        kinds = [t["kind"] for t in body["tables"]]
+        self.assertEqual(kinds, ["query", "query", "custom"])
+        q_main = body["tables"][0]
+        q_alt = body["tables"][1]
+        custom = body["tables"][2]
+        self.assertEqual(q_main["title"], "主查询")
+        self.assertGreaterEqual(q_main["row_count"], 1)
+        self.assertLessEqual(q_alt["row_count"], 5)
+        # source-aware cell resolution
+        self.assertEqual(custom["rows"][0][1], q_main["row_count"])
+        self.assertEqual(custom["rows"][1][1], q_alt["row_count"])
+        if q_alt["rows"]:
+            self.assertEqual(custom["rows"][2][1], q_alt["rows"][0].get("line_name", ""))
+
     def test_export_files(self):
         templates = self.client.get("/api/report-templates").json()
         template = next(item for item in templates if item["config"]["database"]["type"] == "sqlite")
