@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>报表生成程序</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">R</span>
+        <div>
+          <strong>报表生成程序</strong>
+          <small>OPC UA + Database</small>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-btn active" data-view="generate">生成报表</button>
+        <button class="nav-btn" data-view="templates">模板配置</button>
+        <button class="nav-btn" data-view="sources">数据源</button>
+        <button class="nav-btn" data-view="runs">生成记录</button>
+      </nav>
+      <div class="health" id="health">检查服务中...</div>
+    </aside>
+
+    <main class="shell">
+      <section class="view active" id="view-generate">
+        <header class="page-head">
+          <div>
+            <h1>生成报表</h1>
+            <p>选择模板，读取 OPC UA 条件，查询数据库并生成表格式报表。</p>
+          </div>
+          <div class="actions">
+            <select id="templateSelect"></select>
+            <button class="secondary" id="oneClickStartBtn">一键启动</button>
+            <button id="generateBtn">生成预览</button>
+            <button class="secondary" id="exportHtmlBtn">HTML</button>
+            <button class="secondary" id="exportPdfBtn">PDF</button>
+            <button class="secondary" id="exportExcelBtn">Excel</button>
+          </div>
+        </header>
+        <div class="status-line" id="generateStatus"></div>
+        <pre class="startup-result" id="startupResult"></pre>
+        <article class="report-preview" id="reportPreview"></article>
+      </section>
+
+      <section class="view" id="view-templates">
+        <header class="page-head">
+          <div>
+            <h1>模板配置</h1>
+            <p>使用图形化设计器配置页面、页眉、正文和页脚；数据源在数据源页面统一维护，高级 JSON 仍保留用于排查。</p>
+          </div>
+          <div class="actions">
+            <button class="secondary" id="newTemplateBtn">新建</button>
+            <button class="secondary" id="copyTemplateBtn">复制</button>
+            <button id="saveTemplateBtn">保存模板</button>
+            <button class="danger" id="deleteTemplateBtn">删除</button>
+          </div>
+        </header>
+
+        <div class="designer-layout">
+          <section class="panel designer-side">
+            <h2>模板列表</h2>
+            <div id="templateList" class="list"></div>
+          </section>
+
+          <section class="panel designer-main">
+            <label class="field compact-field">
+              <span>模板名称</span>
+              <input id="templateName" type="text">
+            </label>
+
+            <div class="tabbar" id="designerTabs">
+              <button class="tab active" data-tab="page">页面设置</button>
+              <button class="tab" data-tab="header">页眉</button>
+              <button class="tab" data-tab="body">正文表格</button>
+              <button class="tab" data-tab="footer">页脚</button>
+              <button class="tab" data-tab="advanced">高级 JSON</button>
+            </div>
+
+            <div class="designer-tab active" id="tab-page">
+              <div class="form-grid">
+                <label class="field">
+                  <span>纸张大小</span>
+                  <select id="pageSize">
+                    <option value="A4">A4</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>方向</span>
+                  <select id="pageOrientation">
+                    <option value="portrait">纵向</option>
+                    <option value="landscape">横向</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>页边距 mm</span>
+                  <input id="pageMargin" type="number" min="0" step="1">
+                </label>
+              </div>
+            </div>
+
+            <div class="designer-tab" id="tab-header">
+              <div class="designer-toolbar">
+                <strong>页眉表格</strong>
+                <button class="secondary" data-region="header" data-table-action="add-row">加行</button>
+                <button class="secondary" data-region="header" data-table-action="add-col">加列</button>
+                <button class="secondary" data-region="header" data-table-action="remove-row">删行</button>
+                <button class="secondary" data-region="header" data-table-action="remove-col">删列</button>
+              </div>
+              <div id="headerDesigner" class="table-designer"></div>
+            </div>
+
+            <div class="designer-tab" id="tab-body">
+              <div class="form-grid">
+                <label class="field">
+                  <span>查询表</span>
+                  <select id="bodyTable"></select>
+                </label>
+                <label class="field">
+                  <span>返回行数</span>
+                  <input id="bodyLimit" type="number" min="1" max="1000">
+                </label>
+                <label class="field">
+                  <span>排序字段</span>
+                  <select id="bodyOrderColumn"></select>
+                </label>
+                <label class="field">
+                  <span>排序方向</span>
+                  <select id="bodyOrderDirection">
+                    <option value="ASC">升序</option>
+                    <option value="DESC">降序</option>
+                  </select>
+                </label>
+              </div>
+              <div class="designer-toolbar">
+                <strong>字段选择</strong>
+                <button class="secondary" id="loadSchemaBtn">加载表结构</button>
+              </div>
+              <div id="bodyColumnsDesigner" class="column-designer"></div>
+              <div class="designer-toolbar">
+                <strong>筛选条件</strong>
+                <button class="secondary" id="addFilterBtn">添加条件</button>
+              </div>
+              <div id="filterDesigner" class="filter-designer"></div>
+              <div class="designer-toolbar">
+                <strong>自定义正文表格</strong>
+                <button class="secondary" id="addBodyCustomTableBtn">添加表格</button>
+              </div>
+              <div class="custom-table-bar">
+                <label class="field">
+                  <span>当前表格</span>
+                  <select id="bodyCustomTableSelect"></select>
+                </label>
+                <label class="field">
+                  <span>表格名称</span>
+                  <input id="bodyCustomTableTitle">
+                </label>
+              </div>
+              <div class="designer-toolbar">
+                <button class="secondary" data-region="body_custom" data-table-action="add-row">加行</button>
+                <button class="secondary" data-region="body_custom" data-table-action="add-col">加列</button>
+                <button class="secondary" data-region="body_custom" data-table-action="remove-row">删行</button>
+                <button class="secondary" data-region="body_custom" data-table-action="remove-col">删列</button>
+                <button class="danger" id="removeBodyCustomTableBtn">删除当前表格</button>
+              </div>
+              <div id="bodyCustomTableDesigner" class="table-designer"></div>
+            </div>
+
+            <div class="designer-tab" id="tab-footer">
+              <div class="designer-toolbar">
+                <strong>页脚表格</strong>
+                <button class="secondary" data-region="footer" data-table-action="add-row">加行</button>
+                <button class="secondary" data-region="footer" data-table-action="add-col">加列</button>
+                <button class="secondary" data-region="footer" data-table-action="remove-row">删行</button>
+                <button class="secondary" data-region="footer" data-table-action="remove-col">删列</button>
+              </div>
+              <div id="footerDesigner" class="table-designer"></div>
+            </div>
+
+            <div class="designer-tab" id="tab-advanced">
+              <div class="editor-toolbar">
+                <button class="secondary" id="formatTemplateBtn">格式化 JSON</button>
+                <button class="secondary" id="applyJsonBtn">应用 JSON 到设计器</button>
+                <button class="secondary" id="previewEditedBtn">预览当前编辑</button>
+              </div>
+              <textarea id="templateEditor" spellcheck="false"></textarea>
+            </div>
+
+            <div class="status-line" id="templateStatus"></div>
+          </section>
+
+          <aside class="panel property-panel">
+            <h2>属性</h2>
+            <div id="propertyPanel" class="property-content"></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-sources">
+        <header class="page-head">
+          <div>
+            <h1>数据源</h1>
+            <p>集中管理 OPC UA 点位和数据库连接，模板中直接引用已添加的数据点。</p>
+          </div>
+        </header>
+
+        <div class="source-tabs" id="sourceTabs">
+          <button class="tab active" data-source-tab="opcua">OPC UA 点位</button>
+          <button class="tab" data-source-tab="database">数据库</button>
+          <button class="tab" data-source-tab="diagnostics">诊断输出</button>
+        </div>
+
+        <section class="source-tab active" id="source-tab-opcua">
+          <div class="opc-workbench">
+            <section class="panel opc-connection-panel">
+              <h2>连接与浏览</h2>
+              <label class="field">
+                <span>服务器地址</span>
+                <input id="opcServer" value="opc.tcp://192.168.50.233:4840">
+              </label>
+              <label class="field">
+                <span>浏览根节点</span>
+                <input id="opcRoot" value="ns=6;i=1000">
+              </label>
+              <label class="field">
+                <span>搜索节点</span>
+                <input id="opcSearch" placeholder="输入 AIR、AP1、TimeSt 等关键字">
+              </label>
+              <details class="advanced-box">
+                <summary>高级调试</summary>
+                <label class="field">
+                  <span>Mock 节点值 JSON</span>
+                  <textarea id="opcValues">{"batch_no":"B20260514","shift":"A","operator":"张三"}</textarea>
+                </label>
+              </details>
+              <div class="actions">
+                <button id="testOpcBtn">连接</button>
+                <button class="secondary" id="browseOpcBtn">刷新浏览树</button>
+                <button class="secondary" id="readOpcBtn">读取点位库</button>
+              </div>
+              <div class="subhead">节点树</div>
+              <div id="opcBrowseList" class="opc-tree"></div>
+            </section>
+
+            <section class="panel opc-points-panel">
+              <h2>已添加数据点</h2>
+              <div id="opcPointList" class="opc-point-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="source-tab" id="source-tab-database">
+          <div class="source-layout">
+            <section class="panel">
+              <h2>数据库测试</h2>
+            <label class="field">
+              <span>数据库类型</span>
+              <select id="dbType">
+                <option value="mysql" selected>MySQL</option>
+                <option value="sqlite">SQLite</option>
+              </select>
+            </label>
+            <div class="db-grid">
+              <label class="field">
+                <span>Host</span>
+                <input id="dbHost" value="192.168.50.22">
+              </label>
+              <label class="field">
+                <span>Port</span>
+                <input id="dbPort" type="number" value="3306">
+              </label>
+              <label class="field">
+                <span>Username</span>
+                <input id="dbUser" value="root">
+              </label>
+              <label class="field">
+                <span>Password</span>
+                <input id="dbPassword" type="password" value="Br54644800@">
+              </label>
+            </div>
+            <label class="field">
+              <span>数据库名</span>
+              <input id="dbName" value="wn_10">
+            </label>
+            <label class="field">
+              <span>SQLite 路径</span>
+              <input id="dbPath">
+            </label>
+            <label class="field">
+              <span>查询表</span>
+              <input id="dbTable" value="Group1_20260511">
+            </label>
+            <label class="field">
+              <span>查询列，逗号分隔</span>
+              <input id="dbColumns" value="id,collection_time,AIR,AP1,AP2,CP,CT,EC,ES">
+            </label>
+            <div class="actions">
+              <button id="testDbBtn">测试连接</button>
+              <button class="secondary" id="schemaDbBtn">查看表结构</button>
+              <button class="secondary" id="previewDbBtn">预览查询</button>
+            </div>
+            <pre class="result" id="dbResult"></pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="source-tab" id="source-tab-diagnostics">
+          <section class="panel">
+            <h2>诊断输出</h2>
+            <pre class="result" id="opcResult"></pre>
+          </section>
+        </section>
+      </section>
+
+      <section class="view" id="view-runs">
+        <header class="page-head">
+          <div>
+            <h1>生成记录</h1>
+            <p>记录每次报表生成状态，方便追踪失败原因。</p>
+          </div>
+          <button id="refreshRunsBtn">刷新</button>
+        </header>
+        <section class="panel">
+          <table class="data-table" id="runsTable"></table>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
