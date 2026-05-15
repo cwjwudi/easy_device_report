@@ -75,6 +75,8 @@ function ensureTemplateShape(template) {
   config.database ||= { type: "sqlite", path: state.health?.demo_db || "" };
   config.header ||= { title: "页眉", rows: [[{ type: "static", value: "" }]] };
   config.footer ||= { title: "页脚", rows: [[{ type: "static", value: "" }]] };
+  config.header.repeat_pdf_each_page = Boolean(config.header.repeat_pdf_each_page);
+  config.footer.repeat_pdf_each_page = Boolean(config.footer.repeat_pdf_each_page);
   config.body ||= {};
   config.header.rows = normalizeRegionRows(config.header.rows);
   config.footer.rows = normalizeRegionRows(config.footer.rows);
@@ -244,6 +246,8 @@ function syncDesignerFromInputs() {
     orientation: $("#pageOrientation")?.value || "portrait",
     margin_mm: Number($("#pageMargin")?.value || 14),
   };
+  state.designerTemplate.header.repeat_pdf_each_page = Boolean($("#headerRepeatPdf")?.checked);
+  state.designerTemplate.footer.repeat_pdf_each_page = Boolean($("#footerRepeatPdf")?.checked);
   const activeBodyTable = state.designer.bodyEditorOpen ? currentBodyTable() : null;
   const query = activeBodyTable?.kind === "query" ? activeBodyTable : null;
   if (query) {
@@ -452,6 +456,8 @@ function renderDesigner() {
   $("#pageSize").value = tpl.page?.size || "A4";
   $("#pageOrientation").value = tpl.page?.orientation || "portrait";
   $("#pageMargin").value = tpl.page?.margin_mm ?? 14;
+  if ($("#headerRepeatPdf")) $("#headerRepeatPdf").checked = Boolean(tpl.header?.repeat_pdf_each_page);
+  if ($("#footerRepeatPdf")) $("#footerRepeatPdf").checked = Boolean(tpl.footer?.repeat_pdf_each_page);
   if ($("#tplOpcServer")) $("#tplOpcServer").value = tpl.opcua?.server_url || "";
   if ($("#tplOpcRoot")) $("#tplOpcRoot").value = tpl.opcua?.root_node || "ns=6;i=1000";
   if ($("#tplDbType")) $("#tplDbType").value = tpl.database?.type || "sqlite";
@@ -1635,7 +1641,7 @@ function bindDesignerEvents() {
     renderDesigner();
   });
 
-  ["templateName", "pageSize", "pageOrientation", "pageMargin", "bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection", "tplOpcServer", "tplOpcRoot", "tplDbType", "tplDbName", "tplDbHost", "tplDbPort", "tplDbUser", "tplDbPassword", "tplDbPath"].forEach((id) => {
+  ["templateName", "pageSize", "pageOrientation", "pageMargin", "headerRepeatPdf", "footerRepeatPdf", "bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection", "tplOpcServer", "tplOpcRoot", "tplDbType", "tplDbName", "tplDbHost", "tplDbPort", "tplDbUser", "tplDbPassword", "tplDbPath"].forEach((id) => {
     $(`#${id}`)?.addEventListener("input", () => {
       syncDesignerFromInputs();
       if (["bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection"].includes(id)) renderBodyDesigner();

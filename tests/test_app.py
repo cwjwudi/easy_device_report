@@ -66,6 +66,22 @@ class ReportAppTests(unittest.TestCase):
         self.assertEqual(table["rows"][0][0], "row count")
         self.assertGreaterEqual(table["rows"][0][1], 1)
 
+    def test_pdf_repeat_header_footer_flags(self):
+        templates = self.client.get("/api/report-templates").json()
+        template = next(item for item in templates if item["config"]["database"]["type"] == "sqlite")["config"]
+        template["header"]["repeat_pdf_each_page"] = True
+        template["footer"]["repeat_pdf_each_page"] = True
+        response = self.client.post("/api/reports/generate", json={"template": template, "persist_run": False})
+        self.assertEqual(response.status_code, 200)
+        report = response.json()
+        self.assertTrue(report["header"]["repeat_pdf_each_page"])
+        self.assertTrue(report["footer"]["repeat_pdf_each_page"])
+
+        pdf_response = self.client.post("/api/reports/export/pdf", json={"template": template, "persist_run": False})
+        self.assertEqual(pdf_response.status_code, 200)
+        self.assertIn("application/pdf", pdf_response.headers["content-type"])
+        self.assertGreater(len(pdf_response.content), 100)
+
     def test_generate_body_tables_multi_query(self):
         templates = self.client.get("/api/report-templates").json()
         template = next(item for item in templates if item["config"]["database"]["type"] == "sqlite")["config"]

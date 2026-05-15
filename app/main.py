@@ -544,7 +544,7 @@ def render_region(
     rows = []
     for row in region.get("rows", []):
         rows.append([resolve_cell(cell, opcua_values, body_rows, rows_by_source) for cell in row])
-    return {"title": region.get("title", ""), "rows": rows}
+    return {"title": region.get("title", ""), "rows": rows, "repeat_pdf_each_page": bool(region.get("repeat_pdf_each_page"))}
 
 
 async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
@@ -767,15 +767,29 @@ def make_pdf(report: dict[str, Any]) -> bytes:
     pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
     stream = io.BytesIO()
     page_size = landscape(A4) if report.get("page", {}).get("orientation") == "landscape" else portrait(A4)
-    doc = SimpleDocTemplate(stream, pagesize=page_size, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=12 * mm, bottomMargin=12 * mm)
+    margin_mm = float(report.get("page", {}).get("margin_mm") or 14)
+    header_repeat = bool(report.get("header", {}).get("repeat_pdf_each_page"))
+    footer_repeat = bool(report.get("footer", {}).get("repeat_pdf_each_page"))
+    header_rows = report.get("header", {}).get("rows", [])
+    footer_rows = report.get("footer", {}).get("rows", [])
+    repeat_header_height = (len(header_rows) * 8 + 10) * mm if header_repeat and header_rows else 0
+    repeat_footer_height = (len(footer_rows) * 8 + 10) * mm if footer_repeat and footer_rows else 0
+    doc = SimpleDocTemplate(
+        stream,
+        pagesize=page_size,
+        leftMargin=margin_mm * mm,
+        rightMargin=margin_mm * mm,
+        topMargin=(margin_mm * mm) + repeat_header_height,
+        bottomMargin=(margin_mm * mm) + repeat_footer_height,
+    )
     styles = getSampleStyleSheet()
     styles["Title"].fontName = "STSong-Light"
     styles["Normal"].fontName = "STSong-Light"
     elements: list[Any] = [Paragraph(report["name"], styles["Title"]), Paragraph(f"生成时间: {report['generated_at']}", styles["Normal"]), Spacer(1, 6)]
 
-    def add_table(rows: list[list[Any]], header: bool = False) -> None:
+    def make_table(rows: list[list[Any]], header: bool = False) -> Table | None:
         if not rows:
-            return
+            return None
         table = Table([[str(cell) for cell in row] for row in rows], repeatRows=1 if header else 0)
         style = [
             ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
@@ -788,9 +802,43 @@ def make_pdf(report: dict[str, Any]) -> bytes:
         if header:
             style += [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EEF6"))]
         table.setStyle(TableStyle(style))
+        return table
+
+    def add_table(rows: list[list[Any]], header: bool = False) -> None:
+        table = make_table(rows, header)
+        if table is None:
+            return
         elements.extend([table, Spacer(1, 8)])
 
-    add_table(report["header"]["rows"])
+    def draw_repeating_table(rows: list[list[Any]], canvas: Any, bottom_y: float) -> None:
+        if not rows:
+            return
+        width = page_size[0] - doc.leftMargin - doc.rightMargin
+        max_cols = max((len(row) for row in rows), default=1) or 1
+        row_h = 8 * mm
+        col_w = width / max_cols
+        canvas.setFont("STSong-Light", 7)
+        canvas.setStrokeColor(colors.grey)
+        canvas.setLineWidth(0.4)
+        for row_index, row in enumerate(rows):
+            y = bottom_y + (len(rows) - row_index - 1) * row_h
+            for col_index in range(max_cols):
+                x = doc.leftMargin + col_index * col_w
+                canvas.rect(x, y, col_w, row_h, stroke=1, fill=0)
+                text = str(row[col_index] if col_index < len(row) else "")
+                canvas.drawString(x + 2, y + row_h - 5 * mm, text[:42])
+
+    def on_page(canvas: Any, _doc: Any) -> None:
+        canvas.saveState()
+        if header_repeat:
+            header_h = len(header_rows) * 8 * mm
+            draw_repeating_table(header_rows, canvas, page_size[1] - margin_mm * mm - header_h)
+        if footer_repeat:
+            draw_repeating_table(footer_rows, canvas, margin_mm * mm)
+        canvas.restoreState()
+
+    if not header_repeat:
+        add_table(header_rows)
 
     def query_to_rows(columns: list[dict[str, Any]], data_rows: list[dict[str, Any]]) -> list[list[Any]]:
         if not columns:
@@ -814,8 +862,9 @@ def make_pdf(report: dict[str, Any]) -> bytes:
                 elements.append(Paragraph(str(table["title"]), styles["Normal"]))
             add_table(table.get("rows", []))
         add_table(query_to_rows(report["body"].get("columns", []), report["body"].get("rows", [])), header=True)
-    add_table(report["footer"]["rows"])
-    doc.build(elements)
+    if not footer_repeat:
+        add_table(footer_rows)
+    doc.build(elements, onFirstPage=on_page, onLaterPages=on_page)
     return stream.getvalue()
 
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表生成程序</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260515-1145">
+    <link rel="stylesheet" href="/static/styles.css?v=20260515-1205">
   </head>
   <body>
     <aside class="sidebar">
@@ -102,6 +102,10 @@
             </div>
 
             <div class="designer-tab" id="tab-header">
+              <label class="option-row">
+                <input id="headerRepeatPdf" type="checkbox">
+                <span>PDF 导出时每页添加页眉</span>
+              </label>
               <div class="designer-toolbar">
                 <strong>页眉表格</strong>
                 <button class="secondary" data-region="header" data-table-action="add-row">加行</button>
@@ -192,6 +196,10 @@
             </div>
 
             <div class="designer-tab" id="tab-footer">
+              <label class="option-row">
+                <input id="footerRepeatPdf" type="checkbox">
+                <span>PDF 导出时每页添加页脚</span>
+              </label>
               <div class="designer-toolbar">
                 <strong>页脚表格</strong>
                 <button class="secondary" data-region="footer" data-table-action="add-row">加行</button>
@@ -351,6 +359,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260515-1145"></script>
+    <script src="/static/app.js?v=20260515-1205"></script>
   </body>
 </html>

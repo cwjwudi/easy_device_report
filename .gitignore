@@ -33,3 +33,6 @@ app_data/*.db
 .idea/
 Thumbs.db
 .DS_Store
+
+# PDF files
+*.pdf
