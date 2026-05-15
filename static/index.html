@@ -1,10 +1,10 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表生成程序</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260515-1205">
+    <link rel="stylesheet" href="/static/styles.css?v=20260515-1610">
   </head>
   <body>
     <aside class="sidebar">
@@ -97,6 +97,18 @@
                 <label class="field">
                   <span>页边距 mm</span>
                   <input id="pageMargin" type="number" min="0" step="1">
+                </label>
+                <label class="field">
+                  <span>PDF 页码</span>
+                  <select id="pageNumberPosition">
+                    <option value="none">不显示</option>
+                    <option value="top-left">顶部左</option>
+                    <option value="top-center">顶部居中</option>
+                    <option value="top-right">顶部右</option>
+                    <option value="bottom-left">底部左</option>
+                    <option value="bottom-center">底部居中</option>
+                    <option value="bottom-right">底部右</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -249,7 +261,7 @@
               <h2>连接与浏览</h2>
               <label class="field">
                 <span>服务器地址</span>
-                <input id="opcServer" value="opc.tcp://192.168.50.233:4840">
+                <input id="opcServer" value="mock://local">
               </label>
               <label class="field">
                 <span>浏览根节点</span>
@@ -296,7 +308,7 @@
             <div class="db-grid">
               <label class="field">
                 <span>Host</span>
-                <input id="dbHost" value="192.168.50.22">
+                <input id="dbHost" value="127.0.0.1">
               </label>
               <label class="field">
                 <span>Port</span>
@@ -304,16 +316,16 @@
               </label>
               <label class="field">
                 <span>Username</span>
-                <input id="dbUser" value="root">
+                <input id="dbUser" value="">
               </label>
               <label class="field">
                 <span>Password</span>
-                <input id="dbPassword" type="password" value="Br54644800@">
+                <input id="dbPassword" type="password" value="">
               </label>
             </div>
             <label class="field">
               <span>数据库名</span>
-              <input id="dbName" value="wn_10">
+              <input id="dbName" value="">
             </label>
             <label class="field">
               <span>SQLite 路径</span>
@@ -359,7 +371,9 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260515-1205"></script>
+    <script type="module" src="/static/app.js?v=20260515-1610"></script>
     <div id="toastContainer" class="toast-container"></div>
   </body>
 </html>
+
+

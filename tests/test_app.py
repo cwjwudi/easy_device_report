@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -16,7 +17,27 @@ class ReportAppTests(unittest.TestCase):
     def test_health(self):
         response = self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()["ok"])
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["field_mysql"]["password"], "***")
+
+    def test_static_defaults_do_not_embed_field_credentials(self):
+        html = Path("static/index.html").read_text(encoding="utf-8")
+        self.assertNotIn("Br54644800@", html)
+        self.assertNotIn("192.168.50.22", html)
+        self.assertNotIn("opc.tcp://192.168.50.233:4840", html)
+
+    def test_opcua_mock_read(self):
+        response = self.client.post(
+            "/api/opcua/read",
+            json={
+                "server_url": "mock://local",
+                "nodes": ["batch_no", "shift"],
+                "node_values": {"batch_no": "B20260514", "shift": "A"},
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["values"]["batch_no"], "B20260514")
 
     def test_database_preview(self):
         health = self.client.get("/api/health").json()

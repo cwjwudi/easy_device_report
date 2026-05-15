@@ -1,59 +1,51 @@
+import { api as modularApi } from "./js/api.js";
+import { escapeHtml as modularEscapeHtml, setStatus as modularSetStatus, $ as modularDollar, $$ as modularDollars } from "./js/dom.js";
+import { defaultDatabaseConnection } from "./js/database.js";
+import { defaultOpcuaConnection } from "./js/opcua.js";
+import { pretty as modularPretty } from "./js/reports.js";
+import { initialDesignerState, initialOpcuaBrowserState } from "./js/state.js";
+import { clone as modularClone, generateTableId as modularGenerateTableId } from "./js/templateDesigner.js";
+
+void modularApi;
+void modularEscapeHtml;
+void modularSetStatus;
+void modularDollar;
+void modularDollars;
+void defaultDatabaseConnection;
+void defaultOpcuaConnection;
+void modularPretty;
+void initialDesignerState;
+void initialOpcuaBrowserState;
+void modularClone;
+void modularGenerateTableId;
+
 const state = {
   templates: [],
   selectedTemplateId: null,
   lastReport: null,
   health: null,
   designerTemplate: null,
-  designer: {
-    activeTab: "page",
-    selectedRegion: "header",
-    selectedCell: { region: "header", row: 0, col: 0 },
-    selectedBodyTable: 0,
-    bodyEditorOpen: false,
-    schema: null,
-    opcuaNodes: [],
-  },
-  opcuaBrowser: {
-    nodes: [],
-    childrenByNode: {},
-    expanded: {},
-    points: [],
-    selectedNodeId: null,
-  },
+  designer: structuredClone(initialDesignerState),
+  opcuaBrowser: structuredClone(initialOpcuaBrowserState),
 };
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
-    ...options,
-  });
-  if (!response.ok) {
-    let detail = response.statusText;
-    try {
-      const body = await response.json();
-      detail = body.detail || JSON.stringify(body);
-    } catch (_) {}
-    throw new Error(detail);
-  }
-  return response.json();
+  return modularApi(path, options);
 }
 
 function pretty(value) {
-  return JSON.stringify(value, null, 2);
+  return modularPretty(value);
 }
 
 function clone(value) {
-  return structuredClone(value || {});
+  return modularClone(value);
 }
 
 function setStatus(selector, message, isError = false) {
-  const el = $(selector);
-  if (!el) return;
-  el.textContent = message;
-  el.style.color = isError ? "#b42318" : "#657184";
+  modularSetStatus(selector, message, isError);
 }
 
 function showToast(message, type = "info") {
@@ -72,10 +64,7 @@ function showToast(message, type = "info") {
 }
 
 function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return modularEscapeHtml(value);
 }
 
 function currentTemplate() {
@@ -85,7 +74,8 @@ function currentTemplate() {
 function ensureTemplateShape(template) {
   const config = clone(template);
   config.name ||= "未命名模板";
-  config.page ||= { size: "A4", orientation: "portrait", margin_mm: 14 };
+  config.page ||= { size: "A4", orientation: "portrait", margin_mm: 14, page_number_position: "none" };
+  config.page.page_number_position ||= "none";
   config.opcua ||= { server_url: "mock://local", root_node: "ns=6;i=1000", node_values: {} };
   config.database ||= { type: "sqlite", path: state.health?.demo_db || "" };
   config.header ||= { title: "页眉", rows: [[{ type: "static", value: "" }]] };
@@ -100,8 +90,7 @@ function ensureTemplateShape(template) {
 }
 
 function generateTableId(kind) {
-  const prefix = kind === "custom" ? "c" : "q";
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+  return modularGenerateTableId(kind);
 }
 
 function normalizeBodyConfig(body) {
@@ -260,6 +249,7 @@ function syncDesignerFromInputs() {
     size: $("#pageSize")?.value || "A4",
     orientation: $("#pageOrientation")?.value || "portrait",
     margin_mm: Number($("#pageMargin")?.value || 14),
+    page_number_position: $("#pageNumberPosition")?.value || "none",
   };
   state.designerTemplate.header.repeat_pdf_each_page = Boolean($("#headerRepeatPdf")?.checked);
   state.designerTemplate.footer.repeat_pdf_each_page = Boolean($("#footerRepeatPdf")?.checked);
@@ -471,6 +461,7 @@ function renderDesigner() {
   $("#pageSize").value = tpl.page?.size || "A4";
   $("#pageOrientation").value = tpl.page?.orientation || "portrait";
   $("#pageMargin").value = tpl.page?.margin_mm ?? 14;
+  if ($("#pageNumberPosition")) $("#pageNumberPosition").value = tpl.page?.page_number_position || "none";
   if ($("#headerRepeatPdf")) $("#headerRepeatPdf").checked = Boolean(tpl.header?.repeat_pdf_each_page);
   if ($("#footerRepeatPdf")) $("#footerRepeatPdf").checked = Boolean(tpl.footer?.repeat_pdf_each_page);
   if ($("#tplOpcServer")) $("#tplOpcServer").value = tpl.opcua?.server_url || "";
@@ -1681,7 +1672,7 @@ function bindDesignerEvents() {
     renderDesigner();
   });
 
-  ["templateName", "pageSize", "pageOrientation", "pageMargin", "headerRepeatPdf", "footerRepeatPdf", "bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection", "tplOpcServer", "tplOpcRoot", "tplDbType", "tplDbName", "tplDbHost", "tplDbPort", "tplDbUser", "tplDbPassword", "tplDbPath"].forEach((id) => {
+  ["templateName", "pageSize", "pageOrientation", "pageMargin", "pageNumberPosition", "headerRepeatPdf", "footerRepeatPdf", "bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection", "tplOpcServer", "tplOpcRoot", "tplDbType", "tplDbName", "tplDbHost", "tplDbPort", "tplDbUser", "tplDbPassword", "tplDbPath"].forEach((id) => {
     $(`#${id}`)?.addEventListener("input", () => {
       syncDesignerFromInputs();
       if (["bodyTable", "bodyLimit", "bodyOrderColumn", "bodyOrderDirection"].includes(id)) renderBodyDesigner();
