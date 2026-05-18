@@ -859,23 +859,6 @@ textarea {
   white-space: pre-wrap;
 }
 
-.startup-result {
-  display: none;
-  max-height: 260px;
-  overflow: auto;
-  margin: 0 0 14px;
-  padding: 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: #ffffff;
-  color: #344054;
-  white-space: pre-wrap;
-}
-
-.startup-result.active {
-  display: block;
-}
-
 @media (max-width: 1280px) {
   .designer-layout {
     grid-template-columns: 250px minmax(0, 1fr);

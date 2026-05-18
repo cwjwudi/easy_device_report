@@ -355,3 +355,22 @@ def list_report_runs() -> list[dict[str, Any]]:
     with sqlite_connect(APP_DB) as conn:
         rows = conn.execute("SELECT id, template_id, status, message, created_at FROM report_runs ORDER BY id DESC LIMIT 50").fetchall()
     return [dict(row) for row in rows]
+
+
+@router.get("/api/report-runs/latest")
+def latest_report_run() -> dict[str, Any] | None:
+    with sqlite_connect(APP_DB) as conn:
+        row = conn.execute(
+            """
+            SELECT id, template_id, status, message, rendered_json, created_at
+            FROM report_runs
+            WHERE status = 'success' AND rendered_json IS NOT NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["report"] = json.loads(result.pop("rendered_json"))
+    return result

@@ -29,6 +29,8 @@ const state = {
   opcuaBrowser: structuredClone(initialOpcuaBrowserState),
 };
 
+const RECENT_TEMPLATE_ID_KEY = "reportApp.recentTemplateId";
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -69,6 +71,16 @@ function escapeHtml(value) {
 
 function currentTemplate() {
   return state.templates.find((item) => item.id === state.selectedTemplateId);
+}
+
+function readRecentTemplateId() {
+  const value = Number(localStorage.getItem(RECENT_TEMPLATE_ID_KEY) || 0);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function rememberTemplateId(id) {
+  if (id) localStorage.setItem(RECENT_TEMPLATE_ID_KEY, String(id));
+  else localStorage.removeItem(RECENT_TEMPLATE_ID_KEY);
 }
 
 function ensureTemplateShape(template) {
@@ -479,6 +491,7 @@ function selectTemplate(id) {
   state.selectedTemplateId = Number(id);
   const template = currentTemplate();
   if (!template) return;
+  rememberTemplateId(template.id);
   state.designerTemplate = ensureTemplateShape(template.config);
   state.designer.selectedCell = state.designerTemplate.header.rows.length ? { region: "header", row: 0, col: 0 } : null;
   state.designer.selectedBodyTable = 0;
@@ -1119,14 +1132,29 @@ async function loadHealth() {
 
 async function loadTemplates() {
   state.templates = await api("/api/report-templates");
-  const fieldTemplate = state.templates.find((item) => item.name.includes("现场 MySQL"));
-  if (!state.selectedTemplateId && fieldTemplate) {
-    state.selectedTemplateId = fieldTemplate.id;
-  } else if (!state.selectedTemplateId && state.templates.length) {
-    state.selectedTemplateId = state.templates[0].id;
+  const hasSelectedTemplate = state.templates.some((item) => item.id === state.selectedTemplateId);
+  if (!hasSelectedTemplate) {
+    const recentTemplateId = readRecentTemplateId();
+    const recentTemplate = state.templates.find((item) => item.id === recentTemplateId);
+    const fieldTemplate = state.templates.find((item) => item.name.includes("现场 MySQL"));
+    state.selectedTemplateId = recentTemplate?.id || fieldTemplate?.id || state.templates[0]?.id || null;
   }
   renderTemplateList();
   if (state.selectedTemplateId) selectTemplate(state.selectedTemplateId);
+}
+
+async function loadLatestReportPreview() {
+  try {
+    const latest = await api("/api/report-runs/latest");
+    if (!latest?.report) return;
+    if (latest.template_id && state.templates.some((item) => item.id === latest.template_id)) {
+      selectTemplate(latest.template_id);
+    }
+    renderReport(latest.report);
+    setStatus("#generateStatus", `已加载最近一次生成记录：${latest.created_at}`);
+  } catch (error) {
+    setStatus("#generateStatus", `加载最近生成记录失败：${error.message}`, true);
+  }
 }
 
 function renderOpcBrowser() {
@@ -1227,40 +1255,6 @@ async function generateSelected() {
   }
 }
 
-function renderStartupResult(result) {
-  const box = $("#startupResult");
-  const lines = [
-    `一键启动：${result.ok ? "通过" : "有异常"}`,
-    `时间：${result.time}`,
-    "",
-    ...(result.steps || []).map((step) => {
-      const detail = typeof step.detail === "string" ? step.detail : JSON.stringify(step.detail, null, 2);
-      return `${step.ok ? "✓" : "×"} ${step.name}\n${detail}`;
-    }),
-  ];
-  box.textContent = lines.join("\n\n");
-  box.classList.add("active");
-}
-
-async function oneClickStart() {
-  setStatus("#generateStatus", "正在执行一键启动检查...");
-  try {
-    const result = await api("/api/startup/one-click", {
-      method: "POST",
-      body: "{}",
-    });
-    renderStartupResult(result);
-    if (result.template_id) {
-      state.selectedTemplateId = result.template_id;
-      await loadTemplates();
-    }
-    if (result.report) renderReport(result.report);
-    setStatus("#generateStatus", result.ok ? "一键启动完成，现场链路正常" : "一键启动完成，但存在异常，请查看诊断结果", !result.ok);
-  } catch (error) {
-    setStatus("#generateStatus", `一键启动失败：${error.message}`, true);
-  }
-}
-
 async function previewEdited() {
   try {
     if (state.designer.activeTab === "advanced" && !applyJsonToDesigner(false)) return;
@@ -1324,6 +1318,7 @@ async function deleteTemplate() {
   btn.disabled = true;
   try {
     await api(`/api/report-templates/${state.selectedTemplateId}`, { method: "DELETE" });
+    rememberTemplateId(null);
     state.selectedTemplateId = null;
     state.designerTemplate = null;
     await loadTemplates();
@@ -1957,7 +1952,6 @@ function bindDesignerEvents() {
 
 function bindActions() {
   $("#templateSelect").addEventListener("change", (event) => selectTemplate(Number(event.target.value)));
-  $("#oneClickStartBtn").addEventListener("click", oneClickStart);
   $("#generateBtn").addEventListener("click", generateSelected);
   $("#exportHtmlBtn").addEventListener("click", () => exportReport("html"));
   $("#exportPdfBtn").addEventListener("click", () => exportReport("pdf"));
@@ -1997,7 +1991,7 @@ async function boot() {
   await loadHealth();
   await loadTemplates();
   await loadOpcPoints();
-  await generateSelected();
+  await loadLatestReportPreview();
 }
 
 boot().catch((error) => {

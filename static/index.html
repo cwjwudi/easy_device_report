@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表生成程序</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260518-1315">
+    <link rel="stylesheet" href="/static/styles.css?v=20260518-1350">
   </head>
   <body>
     <aside class="sidebar">
@@ -33,7 +33,6 @@
           </div>
           <div class="actions">
             <select id="templateSelect"></select>
-            <button class="secondary" id="oneClickStartBtn">一键启动</button>
             <button id="generateBtn">生成预览</button>
             <button class="secondary" id="exportHtmlBtn">HTML</button>
             <button class="secondary" id="exportPdfBtn">PDF</button>
@@ -41,7 +40,6 @@
           </div>
         </header>
         <div class="status-line" id="generateStatus"></div>
-        <pre class="startup-result" id="startupResult"></pre>
         <article class="report-preview" id="reportPreview"></article>
       </section>
 
@@ -391,7 +389,7 @@
       </section>
     </main>
 
-    <script type="module" src="/static/app.js?v=20260518-1315"></script>
+    <script type="module" src="/static/app.js?v=20260518-1350"></script>
     <div id="toastContainer" class="toast-container"></div>
   </body>
 </html>

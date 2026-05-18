@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.config import APP_DB
 from app.main import app, init_app_db, init_demo_db, seed_defaults
 
 
@@ -140,6 +141,25 @@ class ReportAppTests(unittest.TestCase):
         self.assertIn("body", report)
         self.assertIn("footer", report)
         self.assertGreaterEqual(report["body"]["row_count"], 1)
+
+    def test_latest_report_run_returns_recent_rendered_report(self):
+        template = self.sqlite_template()["config"]
+        run_name = f"latest-report-{uuid4()}"
+        template["name"] = run_name
+        try:
+            response = self.client.post("/api/reports/generate", json={"template": template, "persist_run": True})
+            self.assertEqual(response.status_code, 200)
+            generated = response.json()
+
+            latest = self.client.get("/api/report-runs/latest")
+            self.assertEqual(latest.status_code, 200)
+            body = latest.json()
+            self.assertEqual(body["status"], "success")
+            self.assertEqual(body["report"]["name"], generated["name"])
+            self.assertEqual(body["report"]["generated_at"], generated["generated_at"])
+        finally:
+            with sqlite3.connect(APP_DB) as conn:
+                conn.execute("DELETE FROM report_runs WHERE rendered_json LIKE ?", (f'%"{run_name}"%',))
 
     def test_generate_body_custom_table(self):
         template = self.sqlite_template()["config"]
