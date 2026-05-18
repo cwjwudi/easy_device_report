@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>报表生成程序</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260515-1610">
+    <link rel="stylesheet" href="/static/styles.css?v=20260518-1315">
   </head>
   <body>
     <aside class="sidebar">
@@ -73,6 +73,7 @@
 
             <div class="tabbar" id="designerTabs">
               <button class="tab active" data-tab="page">页面设置</button>
+              <button class="tab" data-tab="communication">通讯配置</button>
               <button class="tab" data-tab="header">页眉</button>
               <button class="tab" data-tab="body">正文表格</button>
               <button class="tab" data-tab="footer">页脚</button>
@@ -113,6 +114,72 @@
               </div>
             </div>
 
+            <div class="designer-tab" id="tab-communication">
+              <div class="config-section">
+                <h3>OPC UA 配置</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>服务器地址</span>
+                    <input id="tplOpcServer" value="mock://local">
+                  </label>
+                  <label class="field">
+                    <span>浏览根节点</span>
+                    <input id="tplOpcRoot" value="ns=6;i=1000">
+                  </label>
+                </div>
+                <div class="actions">
+                  <button class="secondary" id="browseTplOpcBtn">刷新模板点位</button>
+                </div>
+              </div>
+
+              <div class="config-section">
+                <h3>数据库配置</h3>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>数据库类型</span>
+                    <select id="tplDbType">
+                      <option value="sqlite">SQLite</option>
+                      <option value="mysql">MySQL</option>
+                    </select>
+                  </label>
+                </div>
+                <div id="tplMysqlDbSettings" class="db-settings-panel">
+                  <div class="db-grid">
+                    <label class="field">
+                      <span>Host</span>
+                      <input id="tplDbHost" value="127.0.0.1">
+                    </label>
+                    <label class="field">
+                      <span>Port</span>
+                      <input id="tplDbPort" type="number" value="3306">
+                    </label>
+                    <label class="field">
+                      <span>Username</span>
+                      <input id="tplDbUser" value="">
+                    </label>
+                    <label class="field">
+                      <span>Password</span>
+                      <input id="tplDbPassword" type="password" value="">
+                    </label>
+                  </div>
+                  <label class="field">
+                    <span>数据库名</span>
+                    <input id="tplDbName" value="">
+                  </label>
+                </div>
+                <div id="tplSqliteDbSettings" class="db-settings-panel">
+                  <label class="field">
+                    <span>SQLite 路径</span>
+                    <input id="tplDbPath">
+                  </label>
+                </div>
+                <div class="actions">
+                  <button class="secondary" id="testTplDbBtn">测试模板数据库</button>
+                  <button class="secondary" id="loadSchemaBtn">加载表结构</button>
+                </div>
+              </div>
+            </div>
+
             <div class="designer-tab" id="tab-header">
               <label class="option-row">
                 <input id="headerRepeatPdf" type="checkbox">
@@ -146,6 +213,7 @@
               </div>
               <div id="bodyTableList" class="body-table-list"></div>
               <div id="bodyTablesEmpty" class="empty-note">尚未添加任何正文表格，请先插入数据库查询表或自定义表。</div>
+              <div id="bodyTableDetailHost" hidden></div>
 
               <div id="bodyTableDetail" class="body-detail-panel">
                 <div class="body-detail-head">
@@ -155,10 +223,16 @@
                   </div>
                   <button class="secondary" id="closeBodyTableEditorBtn">收起配置</button>
                 </div>
-                <label class="field compact-field">
-                  <span>显示标题</span>
-                  <input id="bodyTableTitle" placeholder="可留空">
-                </label>
+                <div class="form-grid">
+                  <label class="field">
+                    <span>设置名称</span>
+                    <input id="bodyTableName" placeholder="用于配置列表">
+                  </label>
+                  <label class="field">
+                    <span>打印显示名称</span>
+                    <input id="bodyTableTitle" placeholder="可留空">
+                  </label>
+                </div>
 
                 <div id="bodyQueryEditor" class="body-subpanel">
                   <div class="form-grid">
@@ -184,7 +258,6 @@
                   </div>
                   <div class="designer-toolbar">
                     <strong>字段选择</strong>
-                    <button class="secondary" id="loadSchemaBtn">加载表结构</button>
                   </div>
                   <div id="bodyColumnsDesigner" class="column-designer"></div>
                   <div class="designer-toolbar">
@@ -226,7 +299,10 @@
               <div class="editor-toolbar">
                 <button class="secondary" id="formatTemplateBtn">格式化 JSON</button>
                 <button class="secondary" id="applyJsonBtn">应用 JSON 到设计器</button>
+                <button class="secondary" id="exportTemplateJsonBtn">导出 JSON</button>
+                <button class="secondary" id="importTemplateJsonBtn">加载 JSON</button>
                 <button class="secondary" id="previewEditedBtn">预览当前编辑</button>
+                <input id="templateJsonFile" type="file" accept="application/json,.json" hidden>
               </div>
               <textarea id="templateEditor" spellcheck="false"></textarea>
             </div>
@@ -245,13 +321,12 @@
         <header class="page-head">
           <div>
             <h1>数据源</h1>
-            <p>集中管理 OPC UA 点位和数据库连接，模板中直接引用已添加的数据点。</p>
+            <p>集中管理 OPC UA 点位，数据库连接在模板的通讯配置中维护。</p>
           </div>
         </header>
 
         <div class="source-tabs" id="sourceTabs">
           <button class="tab active" data-source-tab="opcua">OPC UA 点位</button>
-          <button class="tab" data-source-tab="database">数据库</button>
           <button class="tab" data-source-tab="diagnostics">诊断输出</button>
         </div>
 
@@ -294,61 +369,6 @@
           </div>
         </section>
 
-        <section class="source-tab" id="source-tab-database">
-          <div class="source-layout">
-            <section class="panel">
-              <h2>数据库测试</h2>
-            <label class="field">
-              <span>数据库类型</span>
-              <select id="dbType">
-                <option value="mysql" selected>MySQL</option>
-                <option value="sqlite">SQLite</option>
-              </select>
-            </label>
-            <div class="db-grid">
-              <label class="field">
-                <span>Host</span>
-                <input id="dbHost" value="127.0.0.1">
-              </label>
-              <label class="field">
-                <span>Port</span>
-                <input id="dbPort" type="number" value="3306">
-              </label>
-              <label class="field">
-                <span>Username</span>
-                <input id="dbUser" value="">
-              </label>
-              <label class="field">
-                <span>Password</span>
-                <input id="dbPassword" type="password" value="">
-              </label>
-            </div>
-            <label class="field">
-              <span>数据库名</span>
-              <input id="dbName" value="">
-            </label>
-            <label class="field">
-              <span>SQLite 路径</span>
-              <input id="dbPath">
-            </label>
-            <label class="field">
-              <span>查询表</span>
-              <input id="dbTable" value="Group1_20260511">
-            </label>
-            <label class="field">
-              <span>查询列，逗号分隔</span>
-              <input id="dbColumns" value="id,collection_time,AIR,AP1,AP2,CP,CT,EC,ES">
-            </label>
-            <div class="actions">
-              <button id="testDbBtn">测试连接</button>
-              <button class="secondary" id="schemaDbBtn">查看表结构</button>
-              <button class="secondary" id="previewDbBtn">预览查询</button>
-            </div>
-            <pre class="result" id="dbResult"></pre>
-            </section>
-          </div>
-        </section>
-
         <section class="source-tab" id="source-tab-diagnostics">
           <section class="panel">
             <h2>诊断输出</h2>
@@ -371,7 +391,7 @@
       </section>
     </main>
 
-    <script type="module" src="/static/app.js?v=20260515-1610"></script>
+    <script type="module" src="/static/app.js?v=20260518-1315"></script>
     <div id="toastContainer" class="toast-container"></div>
   </body>
 </html>

@@ -18,19 +18,19 @@ def normalize_body_tables(body: dict[str, Any]) -> list[dict[str, Any]]:
     raw = body.get("tables")
     if isinstance(raw, list) and raw:
         result: list[dict[str, Any]] = []
-        raw_custom: list[dict[str, Any]] = []
         for index, item in enumerate(raw):
             if not isinstance(item, dict):
                 continue
             kind = item.get("kind")
             entry: dict[str, Any] = {
                 "id": str(item.get("id") or f"t_{index}"),
+                "name": item.get("name") or item.get("settings_name") or item.get("title") or "",
                 "title": item.get("title") or "",
             }
             if kind == "custom":
                 entry["kind"] = "custom"
                 entry["rows"] = item.get("rows", [])
-                raw_custom.append(entry)
+                result.append(entry)
             else:
                 entry["kind"] = "query"
                 entry["table"] = item.get("table", "")
@@ -46,11 +46,11 @@ def normalize_body_tables(body: dict[str, Any]) -> list[dict[str, Any]]:
                 {
                     "id": f"t_custom_legacy_{index}",
                     "kind": "custom",
+                    "name": table.get("name") or table.get("settings_name") or table.get("title") or "",
                     "title": table.get("title", ""),
                     "rows": table.get("rows", []),
                 }
             )
-        result.extend(raw_custom)
         return result
 
     # Legacy layout: synthesize a tables list.
@@ -61,6 +61,7 @@ def normalize_body_tables(body: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": "t_query_legacy",
                 "kind": "query",
+                "name": body.get("name") or body.get("settings_name") or body.get("title") or "",
                 "title": "",
                 "table": body.get("table", ""),
                 "columns": body.get("columns", []),
@@ -76,6 +77,7 @@ def normalize_body_tables(body: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": f"t_custom_legacy_{index}",
                 "kind": "custom",
+                "name": table.get("name") or table.get("settings_name") or table.get("title") or "",
                 "title": table.get("title", ""),
                 "rows": table.get("rows", []),
             }
@@ -169,16 +171,22 @@ async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
         query_request = QueryPreviewRequest(
             connection=DatabaseConnection(**connection_payload),
             table=item.get("table") or "production_records",
-            columns=[column.get("name") if isinstance(column, dict) else column for column in item.get("columns", [])],
+            columns=item.get("columns", []),
             filters=item.get("filters", []),
             order_by=item.get("order_by", []),
             limit=int(item.get("limit", 500) or 500),
             opcua_values=opcua_values,
         )
         result = run_query(query_request)
-        label_map = {column["name"]: column["label"] for column in normalize_columns(item.get("columns", []))}
+        configured_columns = normalize_columns(item.get("columns", []))
+        column_config_map = {column["name"]: column for column in configured_columns}
         result_columns = [
-            {"name": c["name"], "label": label_map.get(c["name"], c["label"])} for c in result["columns"]
+            {
+                **({"decimal_places": column_config_map[c["name"]]["decimal_places"]} if column_config_map.get(c["name"], {}).get("decimal_places") is not None else {}),
+                "name": c["name"],
+                "label": column_config_map.get(c["name"], {}).get("label", c["label"]),
+            }
+            for c in result["columns"]
         ]
         query_outputs[item["id"]] = {
             "columns": result_columns,
@@ -200,6 +208,7 @@ async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
                 {
                     "id": item["id"],
                     "kind": "query",
+                    "name": item.get("name", ""),
                     "title": item.get("title", ""),
                     "table": item.get("table", ""),
                     "columns": q["columns"],
@@ -213,6 +222,7 @@ async def generate_report(template: dict[str, Any]) -> dict[str, Any]:
             entry = {
                 "id": item["id"],
                 "kind": "custom",
+                "name": item.get("name", ""),
                 "title": item.get("title", ""),
                 "rows": rendered["rows"],
             }

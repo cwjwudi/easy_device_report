@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
+from decimal import Decimal
+from numbers import Number
 from typing import Any
 import re
 
@@ -62,20 +64,49 @@ def quote_identifier(value: str, database_type: str) -> str:
     return f"{quote}{value}{quote}"
 
 
-def normalize_columns(columns: list[Any]) -> list[dict[str, str]]:
+def normalize_columns(columns: list[Any]) -> list[dict[str, Any]]:
     normalized = []
     for item in columns:
         if isinstance(item, str):
             normalized.append({"name": item, "label": item})
         else:
             name = str(item.get("name", ""))
-            normalized.append({"name": name, "label": str(item.get("label") or name)})
+            column: dict[str, Any] = {"name": name, "label": str(item.get("label") or name)}
+            decimal_places = item.get("decimal_places")
+            if decimal_places not in (None, ""):
+                try:
+                    column["decimal_places"] = max(0, min(int(decimal_places), 12))
+                except (TypeError, ValueError):
+                    pass
+            normalized.append(column)
     if not normalized:
         normalized = [{"name": "*", "label": "*"}]
     return normalized
 
 
-def build_select_query(request: QueryPreviewRequest) -> tuple[str, list[Any], list[dict[str, str]]]:
+def format_decimal_columns(rows: list[dict[str, Any]], columns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    precision_by_column = {
+        column["name"]: int(column["decimal_places"])
+        for column in columns
+        if column.get("name") not in (None, "*") and column.get("decimal_places") is not None
+    }
+    if not precision_by_column:
+        return rows
+
+    formatted_rows: list[dict[str, Any]] = []
+    for row in rows:
+        next_row = dict(row)
+        for name, places in precision_by_column.items():
+            value = next_row.get(name)
+            if isinstance(value, bool) or value is None:
+                continue
+            if isinstance(value, (Number, Decimal)):
+                next_row[name] = f"{float(value):.{places}f}"
+        formatted_rows.append(next_row)
+    return formatted_rows
+
+
+def build_select_query(request: QueryPreviewRequest) -> tuple[str, list[Any], list[dict[str, Any]]]:
     database_type = request.connection.type
     placeholder = "%s" if database_type == "mysql" else "?"
     table = validate_identifier(request.table, "table")
@@ -151,19 +182,25 @@ def run_query(request: QueryPreviewRequest) -> dict[str, Any]:
     else:
         raise HTTPException(status_code=400, detail=f"Unsupported database type: {request.connection.type}")
 
+    rows = format_decimal_columns(rows, columns)
     rows = make_jsonable(rows)
     if columns and columns[0]["name"] == "*" and rows:
         columns = [{"name": key, "label": key} for key in rows[0].keys()]
     return {"sql": sql, "params": params, "columns": columns, "rows": rows, "row_count": len(rows)}
 
 
-def inspect_database_schema(connection: DatabaseConnection, table_limit: int = 50) -> dict[str, Any]:
+def inspect_database_schema(connection: DatabaseConnection, table_limit: int | None = None) -> dict[str, Any]:
     if connection.type == "sqlite":
         path = resolve_path(connection.path)
         if not path.exists():
             raise HTTPException(status_code=404, detail=f"Database not found: {path}")
         with sqlite_connect(path) as conn:
-            tables = [row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name LIMIT ?", (table_limit,)).fetchall()]
+            table_sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            params: tuple[Any, ...] = ()
+            if table_limit is not None:
+                table_sql += " LIMIT ?"
+                params = (table_limit,)
+            tables = [row["name"] for row in conn.execute(table_sql, params).fetchall()]
             result_tables = []
             for table in tables:
                 columns = [dict(row) for row in conn.execute(f"PRAGMA table_info({quote_identifier(table, 'sqlite')})").fetchall()]
@@ -187,7 +224,9 @@ def inspect_database_schema(connection: DatabaseConnection, table_limit: int = 5
                 validate_identifier(database, "database")
                 cursor.execute(f"SHOW FULL TABLES FROM `{database}` WHERE Table_type = 'BASE TABLE'")
                 table_rows = cursor.fetchall()
-                for table_row in table_rows[:table_limit]:
+                if table_limit is not None:
+                    table_rows = table_rows[:table_limit]
+                for table_row in table_rows:
                     table = next(value for key, value in table_row.items() if key.startswith("Tables_in_"))
                     cursor.execute(f"SHOW COLUMNS FROM `{database}`.`{table}`")
                     result_tables.append({"database": database, "table": table, "columns": make_jsonable(cursor.fetchall())})

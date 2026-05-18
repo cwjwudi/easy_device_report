@@ -162,7 +162,10 @@ def make_pdf(report: dict[str, Any]) -> bytes:
     def make_table(rows: list[list[Any]], header: bool = False) -> Table | None:
         if not rows:
             return None
-        table = Table([[str(cell) for cell in row] for row in rows], repeatRows=1 if header else 0)
+        max_cols = max((len(row) for row in rows), default=1) or 1
+        table_width = page_size[0] - doc.leftMargin - doc.rightMargin
+        normalized_rows = [[str(row[index]) if index < len(row) else "" for index in range(max_cols)] for row in rows]
+        table = Table(normalized_rows, colWidths=[table_width / max_cols] * max_cols, repeatRows=1 if header else 0)
         style = [
             ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),

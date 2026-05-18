@@ -83,10 +83,22 @@ function ensureTemplateShape(template) {
   config.header.repeat_pdf_each_page = Boolean(config.header.repeat_pdf_each_page);
   config.footer.repeat_pdf_each_page = Boolean(config.footer.repeat_pdf_each_page);
   config.body ||= {};
-  config.header.rows = normalizeRegionRows(config.header.rows);
-  config.footer.rows = normalizeRegionRows(config.footer.rows);
+  config.header.rows = normalizeRegionRows(config.header.rows, { allowEmpty: true });
+  config.footer.rows = normalizeRegionRows(config.footer.rows, { allowEmpty: true });
   config.body = normalizeBodyConfig(config.body);
   return config;
+}
+
+function blankTemplateConfig(name = "新建报表模板") {
+  return {
+    name,
+    page: { size: "A4", orientation: "portrait", margin_mm: 14, page_number_position: "none" },
+    opcua: { server_url: "", root_node: "", node_values: {} },
+    database: { type: "sqlite", path: "" },
+    header: { title: "", rows: [], repeat_pdf_each_page: false },
+    footer: { title: "", rows: [], repeat_pdf_each_page: false },
+    body: { tables: [] },
+  };
 }
 
 function generateTableId(kind) {
@@ -109,6 +121,7 @@ function normalizeBodyConfig(body) {
       tables.push({
         id: generateTableId("query"),
         kind: "query",
+        name: body.name || body.settings_name || "",
         title: "",
         table: body.table || "",
         columns: Array.isArray(body.columns) ? body.columns : [],
@@ -123,7 +136,8 @@ function normalizeBodyConfig(body) {
         tables.push({
           id: generateTableId("custom"),
           kind: "custom",
-          title: table.title || `自定义表格 ${index + 1}`,
+          name: table.name || table.settings_name || `自定义表 ${index + 1}`,
+          title: table.title || "",
           rows: normalizeRegionRows(table.rows),
         });
       });
@@ -148,6 +162,7 @@ function normalizeBodyTable(item, index) {
   const out = {
     id: safe.id || generateTableId(kind),
     kind,
+    name: typeof safe.name === "string" ? safe.name : typeof safe.settings_name === "string" ? safe.settings_name : typeof safe.title === "string" ? safe.title : "",
     title: typeof safe.title === "string" ? safe.title : "",
   };
   if (kind === "custom") {
@@ -193,7 +208,9 @@ function queryTables() {
   return bodyTables().filter((t) => t.kind === "query");
 }
 
-function normalizeRegionRows(rows) {
+function normalizeRegionRows(rows, options = {}) {
+  const allowEmpty = Boolean(options.allowEmpty);
+  if (allowEmpty && (!Array.isArray(rows) || rows.length === 0)) return [];
   const normalized = Array.isArray(rows) && rows.length ? rows : [[{ type: "static", value: "" }]];
   const maxCols = Math.max(...normalized.map((row) => Math.max(row.length, 1)));
   return normalized.map((row) => {
@@ -266,27 +283,41 @@ function syncDesignerFromInputs() {
   }
   const current = currentBodyTable();
   if (current) {
+    const nameInput = $("#bodyTableName");
     const titleInput = $("#bodyTableTitle");
+    if (nameInput && document.activeElement !== nameInput) {
+      nameInput.value = current.name || "";
+    }
     if (titleInput && document.activeElement !== titleInput) {
       titleInput.value = current.title || "";
     }
   }
 
-  state.designerTemplate.opcua.server_url = $("#tplOpcServer")?.value.trim() || state.designerTemplate.opcua.server_url || "mock://local";
-  state.designerTemplate.opcua.root_node = $("#tplOpcRoot")?.value.trim() || state.designerTemplate.opcua.root_node || "ns=6;i=1000";
+  const opcServerInput = $("#tplOpcServer");
+  const opcRootInput = $("#tplOpcRoot");
+  state.designerTemplate.opcua.server_url = opcServerInput ? opcServerInput.value.trim() : state.designerTemplate.opcua.server_url || "";
+  state.designerTemplate.opcua.root_node = opcRootInput ? opcRootInput.value.trim() : state.designerTemplate.opcua.root_node || "";
   const dbType = $("#tplDbType")?.value || state.designerTemplate.database.type || "sqlite";
-  state.designerTemplate.database.type = dbType;
+  const previousDatabase = state.designerTemplate.database || {};
   if (dbType === "mysql") {
-    state.designerTemplate.database.name = $("#tplDbName")?.value.trim() || state.designerTemplate.database.name || "";
-    state.designerTemplate.database.database = $("#tplDbName")?.value.trim() || state.designerTemplate.database.database || "";
-    state.designerTemplate.database.host = $("#tplDbHost")?.value.trim() || state.designerTemplate.database.host || "127.0.0.1";
-    state.designerTemplate.database.port = Number($("#tplDbPort")?.value || state.designerTemplate.database.port || 3306);
-    state.designerTemplate.database.username = $("#tplDbUser")?.value.trim() || state.designerTemplate.database.username || "";
-    state.designerTemplate.database.password = $("#tplDbPassword")?.value ?? state.designerTemplate.database.password ?? "";
-    state.designerTemplate.database.charset ||= "utf8mb4";
+    const databaseName = $("#tplDbName")?.value.trim() || previousDatabase.database || previousDatabase.name || "";
+    state.designerTemplate.database = {
+      type: "mysql",
+      name: databaseName,
+      database: databaseName,
+      host: $("#tplDbHost")?.value.trim() || previousDatabase.host || "127.0.0.1",
+      port: Number($("#tplDbPort")?.value || previousDatabase.port || 3306),
+      username: $("#tplDbUser")?.value.trim() || previousDatabase.username || "",
+      password: $("#tplDbPassword")?.value ?? previousDatabase.password ?? "",
+      charset: previousDatabase.charset || "utf8mb4",
+    };
   } else {
-    state.designerTemplate.database.path = $("#tplDbPath")?.value.trim() || state.designerTemplate.database.path || "";
+    state.designerTemplate.database = {
+      type: "sqlite",
+      path: $("#tplDbPath") ? $("#tplDbPath").value.trim() : previousDatabase.path || "",
+    };
   }
+  syncTemplateDatabaseSettingsVisibility();
   syncJsonEditor();
 }
 
@@ -304,7 +335,7 @@ function parseEditorTemplate() {
 function applyJsonToDesigner(showStatus = false) {
   try {
     state.designerTemplate = ensureTemplateShape(JSON.parse($("#templateEditor").value));
-    state.designer.selectedCell = { region: "header", row: 0, col: 0 };
+    state.designer.selectedCell = state.designerTemplate.header.rows.length ? { region: "header", row: 0, col: 0 } : null;
     state.designer.selectedBodyTable = 0;
     state.designer.bodyEditorOpen = false;
     renderDesigner();
@@ -336,6 +367,10 @@ function currentDbConnection() {
 function templateDbConnection() {
   syncDesignerFromInputs();
   return clone(state.designerTemplate.database);
+}
+
+function templateDbConnectionKey() {
+  return JSON.stringify(templateDbConnection());
 }
 
 function getSchemaColumns() {
@@ -430,7 +465,7 @@ function renderTemplateList() {
   state.templates.forEach((template) => {
     const btn = document.createElement("button");
     btn.className = template.id === state.selectedTemplateId ? "active" : "";
-    btn.textContent = `${template.name} #${template.id}`;
+    btn.textContent = template.name;
     btn.addEventListener("click", () => selectTemplate(template.id));
     list.appendChild(btn);
   });
@@ -445,7 +480,7 @@ function selectTemplate(id) {
   const template = currentTemplate();
   if (!template) return;
   state.designerTemplate = ensureTemplateShape(template.config);
-  state.designer.selectedCell = { region: "header", row: 0, col: 0 };
+  state.designer.selectedCell = state.designerTemplate.header.rows.length ? { region: "header", row: 0, col: 0 } : null;
   state.designer.selectedBodyTable = 0;
   state.designer.bodyEditorOpen = false;
   $("#templateName").value = state.designerTemplate.name;
@@ -465,7 +500,7 @@ function renderDesigner() {
   if ($("#headerRepeatPdf")) $("#headerRepeatPdf").checked = Boolean(tpl.header?.repeat_pdf_each_page);
   if ($("#footerRepeatPdf")) $("#footerRepeatPdf").checked = Boolean(tpl.footer?.repeat_pdf_each_page);
   if ($("#tplOpcServer")) $("#tplOpcServer").value = tpl.opcua?.server_url || "";
-  if ($("#tplOpcRoot")) $("#tplOpcRoot").value = tpl.opcua?.root_node || "ns=6;i=1000";
+  if ($("#tplOpcRoot")) $("#tplOpcRoot").value = tpl.opcua?.root_node || "";
   if ($("#tplDbType")) $("#tplDbType").value = tpl.database?.type || "sqlite";
   if ($("#tplDbName")) $("#tplDbName").value = tpl.database?.database || tpl.database?.name || "";
   if ($("#tplDbHost")) $("#tplDbHost").value = tpl.database?.host || "";
@@ -473,6 +508,7 @@ function renderDesigner() {
   if ($("#tplDbUser")) $("#tplDbUser").value = tpl.database?.username || "";
   if ($("#tplDbPassword")) $("#tplDbPassword").value = tpl.database?.password || "";
   if ($("#tplDbPath")) $("#tplDbPath").value = tpl.database?.path || "";
+  syncTemplateDatabaseSettingsVisibility();
 
   renderTabs();
   renderRegionTable("header");
@@ -490,6 +526,10 @@ function renderTabs() {
 function renderRegionTable(region) {
   const container = $(`#${region}Designer`);
   const rows = state.designerTemplate[region].rows;
+  if (!rows.length) {
+    container.innerHTML = `<div class="empty-note">${region === "header" ? "页眉" : "页脚"}已清空。</div>`;
+    return;
+  }
   container.innerHTML = `
     <table class="designer-table">
       <tbody>
@@ -512,12 +552,16 @@ function renderRegionTable(region) {
 }
 
 function renderBodyDesigner() {
+  const detailPanel = $("#bodyTableDetail");
+  const detailHost = $("#bodyTableDetailHost");
+  if (detailPanel && detailPanel.parentElement !== detailHost) {
+    detailHost?.appendChild(detailPanel);
+  }
   renderBodyTablesList();
   const tables = bodyTables();
   const queryPanel = $("#bodyQueryEditor");
   const customPanel = $("#bodyCustomEditor");
   const emptyNote = $("#bodyTablesEmpty");
-  const detailPanel = $("#bodyTableDetail");
   if (!tables.length) {
     queryPanel?.classList.remove("active");
     customPanel?.classList.remove("active");
@@ -534,6 +578,10 @@ function renderBodyDesigner() {
     return;
   }
   const current = currentBodyTable();
+  const activeHost = $(`[data-body-table-detail-host="${state.designer.selectedBodyTable}"]`);
+  if (detailPanel && activeHost && detailPanel.parentElement !== activeHost) {
+    activeHost.appendChild(detailPanel);
+  }
   detailPanel?.classList.add("active");
   renderBodyDetailHeader(current);
   if (current?.kind === "query") {
@@ -549,7 +597,7 @@ function renderBodyDesigner() {
 
 function bodyTableLabel(table, index) {
   if (!table) return "";
-  return table.title || (table.kind === "query" ? table.table || `数据库查询表 ${index + 1}` : `自定义表 ${index + 1}`);
+  return table.name || (table.kind === "query" ? table.table || `数据库查询表 ${index + 1}` : `自定义表 ${index + 1}`);
 }
 
 function bodyTableSummary(table) {
@@ -590,6 +638,7 @@ function renderBodyTablesList() {
             <button class="secondary icon-btn" data-body-table-move="${i}" data-dir="1" ${i >= tables.length - 1 ? "disabled" : ""}>↓</button>
             <button class="danger icon-btn" data-body-table-remove="${i}">×</button>
           </div>
+          <div class="body-table-detail-host" data-body-table-detail-host="${i}"></div>
         </div>`;
     })
     .join("");
@@ -600,9 +649,11 @@ function renderBodyDetailHeader(table) {
   const idx = clampSelectedBodyTable();
   const title = $("#bodyTableDetailTitle");
   const meta = $("#bodyTableDetailMeta");
+  const nameInput = $("#bodyTableName");
   const titleInput = $("#bodyTableTitle");
   if (title) title.textContent = bodyTableLabel(table, idx);
   if (meta) meta.textContent = table.kind === "query" ? "数据库查询表配置" : "自定义表配置";
+  if (nameInput && document.activeElement !== nameInput) nameInput.value = table.name || "";
   if (titleInput && document.activeElement !== titleInput) titleInput.value = table.title || "";
 }
 
@@ -679,6 +730,7 @@ function renderBodyColumns() {
         <div class="column-row ${index >= 0 ? "enabled" : ""}">
           <label><input type="checkbox" data-column-toggle="${escapeHtml(name)}" ${index >= 0 ? "checked" : ""}> ${escapeHtml(name)}</label>
           <input data-column-label="${escapeHtml(name)}" value="${escapeHtml(column.label || name)}" ${index < 0 ? "disabled" : ""}>
+          <input data-column-decimals="${escapeHtml(name)}" type="number" min="0" max="12" step="1" placeholder="小数位" value="${column.decimal_places ?? ""}" ${index < 0 ? "disabled" : ""}>
           <button class="secondary icon-btn" data-column-move="${escapeHtml(name)}" data-dir="-1" ${index <= 0 ? "disabled" : ""}>↑</button>
           <button class="secondary icon-btn" data-column-move="${escapeHtml(name)}" data-dir="1" ${index < 0 || index >= selected.length - 1 ? "disabled" : ""}>↓</button>
         </div>`;
@@ -723,19 +775,23 @@ function addBodyTable(kind) {
   const tables = state.designerTemplate.body.tables;
   let entry;
   if (kind === "custom") {
+    const nextIndex = tables.filter((t) => t.kind === "custom").length + 1;
     entry = {
       id: generateTableId("custom"),
       kind: "custom",
-      title: `自定义表格 ${tables.filter((t) => t.kind === "custom").length + 1}`,
+      name: `自定义表 ${nextIndex}`,
+      title: "",
       rows: [
         [{ type: "static", value: "名称" }, { type: "static", value: "值" }],
         [{ type: "static", value: "" }, { type: "static", value: "" }],
       ],
     };
   } else {
+    const nextIndex = tables.filter((t) => t.kind === "query").length + 1;
     entry = {
       id: generateTableId("query"),
       kind: "query",
+      name: `数据库查询表 ${nextIndex}`,
       title: "",
       table: "",
       columns: [],
@@ -797,15 +853,24 @@ function moveCurrentBodyTable(direction, index = state.designer.selectedBodyTabl
   const [item] = tables.splice(idx, 1);
   tables.splice(next, 0, item);
   state.designer.selectedBodyTable = next;
+  syncJsonEditor();
   renderDesigner();
 }
 
 function renameCurrentBodyTable(value) {
   const current = currentBodyTable();
   if (!current) return;
-  current.title = value;
+  current.name = value;
   syncJsonEditor();
   renderBodyTablesList();
+  renderBodyDetailHeader(current);
+}
+
+function setCurrentBodyTablePrintTitle(value) {
+  const current = currentBodyTable();
+  if (!current) return;
+  current.title = value;
+  syncJsonEditor();
   renderBodyDetailHeader(current);
 }
 
@@ -995,6 +1060,7 @@ function renderCellPropertyFields() {
 function mutateRegionTable(region, action) {
   let rows;
   let tableIndex;
+  const allowEmpty = region === "header" || region === "footer";
   if (region === "body_custom") {
     const current = currentBodyTable();
     if (!current || current.kind !== "custom") return;
@@ -1005,10 +1071,16 @@ function mutateRegionTable(region, action) {
   }
   const colCount = rows[0]?.length || 1;
   if (action === "add-row") rows.push(Array.from({ length: colCount }, () => ({ type: "static", value: "" })));
-  if (action === "add-col") rows.forEach((row) => row.push({ type: "static", value: "" }));
-  if (action === "remove-row" && rows.length > 1) rows.pop();
-  if (action === "remove-col" && colCount > 1) rows.forEach((row) => row.pop());
-  state.designer.selectedCell = { region, tableIndex, row: 0, col: 0 };
+  if (action === "add-col") {
+    if (!rows.length) rows.push([{ type: "static", value: "" }]);
+    else rows.forEach((row) => row.push({ type: "static", value: "" }));
+  }
+  if (action === "remove-row" && (rows.length > 1 || allowEmpty)) rows.pop();
+  if (action === "remove-col") {
+    if (colCount > 1) rows.forEach((row) => row.pop());
+    else if (allowEmpty) rows.splice(0, rows.length);
+  }
+  state.designer.selectedCell = rows.length ? { region, tableIndex, row: 0, col: 0 } : null;
   renderDesigner();
 }
 
@@ -1028,17 +1100,18 @@ async function loadHealth() {
   try {
     state.health = await api("/api/health");
     $("#health").textContent = `服务正常\n${state.health.time}`;
-    $("#dbPath").value = state.health.demo_db;
+    if ($("#dbPath")) $("#dbPath").value = state.health.demo_db;
     if (state.health.field_opcua) {
       $("#opcServer").value = state.health.field_opcua.server_url;
       $("#opcRoot").value = state.health.field_opcua.root_node;
     }
     if (state.health.field_mysql) {
-      $("#dbHost").value = state.health.field_mysql.host;
-      $("#dbPort").value = state.health.field_mysql.port;
-      $("#dbUser").value = state.health.field_mysql.username;
-      $("#dbName").value = state.health.field_mysql.database;
+      if ($("#dbHost")) $("#dbHost").value = state.health.field_mysql.host;
+      if ($("#dbPort")) $("#dbPort").value = state.health.field_mysql.port;
+      if ($("#dbUser")) $("#dbUser").value = state.health.field_mysql.username;
+      if ($("#dbName")) $("#dbName").value = state.health.field_mysql.database;
     }
+    syncDatabaseSettingsVisibility();
   } catch (error) {
     $("#health").textContent = `服务异常：${error.message}`;
   }
@@ -1262,17 +1335,28 @@ async function deleteTemplate() {
   }
 }
 
-function newTemplate() {
-  const base = state.designerTemplate || state.templates[0]?.config || {};
-  state.selectedTemplateId = null;
-  state.designerTemplate = ensureTemplateShape(base);
-  state.designerTemplate.name = "新建报表模板";
-  state.designer.selectedCell = { region: "header", row: 0, col: 0 };
-  state.designer.selectedBodyTable = 0;
-  state.designer.bodyEditorOpen = false;
-  renderTemplateList();
-  renderDesigner();
-  showToast("新建模板已就绪，请填写后保存", "info");
+async function newTemplate() {
+  const btn = $("#newTemplateBtn");
+  btn.disabled = true;
+  try {
+    const config = blankTemplateConfig();
+    const saved = await api("/api/report-templates", {
+      method: "POST",
+      body: JSON.stringify({ name: config.name, config }),
+    });
+    state.selectedTemplateId = saved.id;
+    state.designerTemplate = ensureTemplateShape(saved.config);
+    state.designer.selectedCell = null;
+    state.designer.selectedBodyTable = 0;
+    state.designer.bodyEditorOpen = false;
+    state.designer.activeTab = "page";
+    await loadTemplates();
+    showToast("新建模板已创建", "success");
+  } catch (error) {
+    showToast(`新建失败：${error.message}`, "error");
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 async function exportReport(format) {
@@ -1293,6 +1377,52 @@ async function exportReport(format) {
   a.download = `report.${format === "excel" ? "xlsx" : format}`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+function exportTemplateJson() {
+  if (!state.designerTemplate) return;
+  syncDesignerFromInputs();
+  const payload = parseEditorTemplate().config;
+  const blob = new Blob([pretty(payload)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const safeName = (payload.name || "report-template").replace(/[\\/:*?"<>|]+/g, "_");
+  a.href = url;
+  a.download = `${safeName}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importTemplateJsonFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    state.selectedTemplateId = null;
+    state.designerTemplate = ensureTemplateShape(JSON.parse(text));
+    state.designer.selectedCell = state.designerTemplate.header.rows.length ? { region: "header", row: 0, col: 0 } : null;
+    state.designer.selectedBodyTable = 0;
+    state.designer.bodyEditorOpen = false;
+    renderTemplateList();
+    renderDesigner();
+    setStatus("#templateStatus", "JSON 文件已加载");
+  } catch (error) {
+    setStatus("#templateStatus", `JSON 文件加载失败：${error.message}`, true);
+  } finally {
+    const input = $("#templateJsonFile");
+    if (input) input.value = "";
+  }
+}
+
+function syncDatabaseSettingsVisibility() {
+  const type = $("#dbType")?.value || "mysql";
+  $("#mysqlDbSettings")?.classList.toggle("hidden", type !== "mysql");
+  $("#sqliteDbSettings")?.classList.toggle("hidden", type !== "sqlite");
+}
+
+function syncTemplateDatabaseSettingsVisibility() {
+  const type = $("#tplDbType")?.value || "sqlite";
+  $("#tplMysqlDbSettings")?.classList.toggle("hidden", type !== "mysql");
+  $("#tplSqliteDbSettings")?.classList.toggle("hidden", type !== "sqlite");
 }
 
 async function browseTemplateOpc() {
@@ -1318,24 +1448,40 @@ async function browseTemplateOpc() {
   }
 }
 
-async function loadTemplateSchema() {
+async function loadTemplateSchema(options = {}) {
+  const { force = true, silent = false } = options;
+  const connection = templateDbConnection();
+  const connectionKey = JSON.stringify(connection);
+  if (!force && state.designer.schema && state.designer.schemaConnectionKey === connectionKey) {
+    return state.designer.schema;
+  }
+  if (state.designer.schemaLoading) return state.designer.schema;
+  state.designer.schemaLoading = true;
   try {
-    syncDesignerFromInputs();
-    setStatus("#templateStatus", "正在加载表结构...");
+    if (!silent) setStatus("#templateStatus", "正在扫描数据库表...");
     state.designer.schema = await api("/api/database/schema", {
       method: "POST",
-      body: JSON.stringify(templateDbConnection()),
+      body: JSON.stringify(connection),
     });
+    state.designer.schemaConnectionKey = connectionKey;
     const query = currentBodyQuery();
     if (query) {
       const firstTable = state.designer.schema.tables?.find((item) => item.table === query.table) || state.designer.schema.tables?.[0];
       if (!query.table && firstTable) query.table = firstTable.table;
     }
     renderDesigner();
-    setStatus("#templateStatus", "表结构已加载");
+    if (!silent) setStatus("#templateStatus", `表结构已加载，共 ${state.designer.schema.tables?.length || 0} 张表`);
+    return state.designer.schema;
   } catch (error) {
-    setStatus("#templateStatus", `表结构加载失败：${error.message}`, true);
+    if (!silent) setStatus("#templateStatus", `表结构加载失败：${error.message}`, true);
+    throw error;
+  } finally {
+    state.designer.schemaLoading = false;
   }
+}
+
+function scanSchemaForBodyTableSelect() {
+  loadTemplateSchema({ force: false }).catch(() => {});
 }
 
 async function testTemplateDb() {
@@ -1362,6 +1508,12 @@ function mutateColumn(name, action, value) {
   }
   if (action === "label" && index >= 0) {
     columns[index].label = value || name;
+    syncJsonEditor();
+    return;
+  }
+  if (action === "decimal_places" && index >= 0) {
+    if (value === "") delete columns[index].decimal_places;
+    else if (/^\d+$/.test(String(value))) columns[index].decimal_places = Math.max(0, Math.min(Number(value), 12));
     syncJsonEditor();
     return;
   }
@@ -1770,8 +1922,17 @@ function bindDesignerEvents() {
 
   document.addEventListener("input", (event) => {
     if (event.target.matches("[data-column-label]")) mutateColumn(event.target.dataset.columnLabel, "label", event.target.value);
+    if (event.target.matches("[data-column-decimals]")) mutateColumn(event.target.dataset.columnDecimals, "decimal_places", event.target.value);
     if (event.target.matches("[data-filter-value]")) mutateFilter(Number(event.target.dataset.filterValue), "value", event.target.value);
     if (event.target.matches("[data-filter-node-manual]")) mutateFilter(Number(event.target.dataset.filterNodeManual), "node", event.target.value);
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (event.target.matches("#bodyTable")) scanSchemaForBodyTableSelect();
+  });
+
+  document.addEventListener("focusin", (event) => {
+    if (event.target.matches("#bodyTable")) scanSchemaForBodyTableSelect();
   });
 
   document.addEventListener("change", (event) => {
@@ -1781,7 +1942,8 @@ function bindDesignerEvents() {
     if (event.target.matches("[data-filter-node]")) mutateFilter(Number(event.target.dataset.filterNode), "node", event.target.value);
   });
 
-  $("#bodyTableTitle")?.addEventListener("input", (event) => renameCurrentBodyTable(event.target.value));
+  $("#bodyTableName")?.addEventListener("input", (event) => renameCurrentBodyTable(event.target.value));
+  $("#bodyTableTitle")?.addEventListener("input", (event) => setCurrentBodyTablePrintTitle(event.target.value));
   $("#insertBodyTableBtn")?.addEventListener("click", () => addBodyTable($("#bodyInsertKind")?.value || "query"));
   $("#closeBodyTableEditorBtn")?.addEventListener("click", closeBodyTableEditor);
   $("#loadSchemaBtn").addEventListener("click", loadTemplateSchema);
@@ -1812,14 +1974,18 @@ function bindActions() {
       setStatus("#templateStatus", `JSON 格式错误：${error.message}`, true);
     }
   });
+  $("#exportTemplateJsonBtn").addEventListener("click", exportTemplateJson);
+  $("#importTemplateJsonBtn").addEventListener("click", () => $("#templateJsonFile").click());
+  $("#templateJsonFile").addEventListener("change", (event) => importTemplateJsonFile(event.target.files?.[0]));
   $("#previewEditedBtn").addEventListener("click", previewEdited);
   $("#testOpcBtn").addEventListener("click", testOpc);
   $("#readOpcBtn").addEventListener("click", readOpc);
   $("#browseOpcBtn").addEventListener("click", browseOpc);
   $("#opcSearch").addEventListener("input", renderOpcBrowser);
-  $("#testDbBtn").addEventListener("click", testDb);
-  $("#schemaDbBtn").addEventListener("click", schemaDb);
-  $("#previewDbBtn").addEventListener("click", previewDb);
+  $("#testDbBtn")?.addEventListener("click", testDb);
+  $("#dbType")?.addEventListener("change", syncDatabaseSettingsVisibility);
+  $("#schemaDbBtn")?.addEventListener("click", schemaDb);
+  $("#previewDbBtn")?.addEventListener("click", previewDb);
   $("#refreshRunsBtn").addEventListener("click", loadRuns);
   bindDesignerEvents();
 }

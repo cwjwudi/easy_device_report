@@ -29,6 +29,23 @@ from ..utils import make_jsonable, now_iso, resolve_path
 router = APIRouter()
 
 
+def unique_template_name(name: str, exclude_id: int | None = None) -> str:
+    base = name.strip() or "未命名模板"
+    with sqlite_connect(APP_DB) as conn:
+        rows = conn.execute("SELECT id, name FROM report_templates").fetchall()
+    existing = {
+        row["name"]
+        for row in rows
+        if exclude_id is None or int(row["id"]) != int(exclude_id)
+    }
+    if base not in existing:
+        return base
+    index = 2
+    while f"{base} {index}" in existing:
+        index += 1
+    return f"{base} {index}"
+
+
 @router.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
@@ -246,32 +263,34 @@ def read_report_template(template_id: int) -> dict[str, Any]:
 @router.post("/api/report-templates")
 def create_report_template(payload: TemplatePayload) -> dict[str, Any]:
     config = payload.config
-    config["name"] = payload.name
+    name = unique_template_name(payload.name)
+    config["name"] = name
     with sqlite_connect(APP_DB) as conn:
         cursor = conn.execute(
             "INSERT INTO report_templates (name, config_json, created_at, updated_at) VALUES (?, ?, ?, ?)",
-            (payload.name, json.dumps(config, ensure_ascii=False), now_iso(), now_iso()),
+            (name, json.dumps(config, ensure_ascii=False), now_iso(), now_iso()),
         )
-    return {"id": cursor.lastrowid, "name": payload.name, "config": config}
+    return {"id": cursor.lastrowid, "name": name, "config": config}
 
 
 @router.put("/api/report-templates/{template_id}")
 def update_report_template(template_id: int, payload: TemplatePayload) -> dict[str, Any]:
     get_template(template_id)
     config = payload.config
-    config["name"] = payload.name
+    name = unique_template_name(payload.name, exclude_id=template_id)
+    config["name"] = name
     with sqlite_connect(APP_DB) as conn:
         conn.execute(
             "UPDATE report_templates SET name = ?, config_json = ?, updated_at = ? WHERE id = ?",
-            (payload.name, json.dumps(config, ensure_ascii=False), now_iso(), template_id),
+            (name, json.dumps(config, ensure_ascii=False), now_iso(), template_id),
         )
-    return {"id": template_id, "name": payload.name, "config": config}
+    return {"id": template_id, "name": name, "config": config}
 
 
 @router.post("/api/report-templates/{template_id}/copy")
 def copy_report_template(template_id: int) -> dict[str, Any]:
     template = get_template(template_id)
-    copied_name = f"{template['name']} 副本"
+    copied_name = unique_template_name(f"{template['name']} 副本")
     template.pop("id", None)
     template["name"] = copied_name
     return create_report_template(TemplatePayload(name=copied_name, config=template))
